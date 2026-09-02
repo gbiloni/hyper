@@ -133,7 +133,7 @@ sequenceDiagram
     participant Agente as 👤 Agente Humano
 
     Cliente->>Meta: Envía mensaje
-    Meta->>CRM: POST /api/webhook/meta (o /telegram)
+    Meta->>CRM: POST /hypercrm/api/whatsapp-webhooks/messages (o /api/webhook/telegram)
     CRM->>DB: Guarda en wapp_mensajes (ENTRANTE)
     CRM->>DB: Busca nodo en crm_cuentas por identificador
     CRM->>DB: Evalúa reglas del bot (crm_bot_config)
@@ -153,7 +153,7 @@ sequenceDiagram
 ### A. Inbound — Mensajes Entrantes
 
 1. El cliente envía un mensaje a WhatsApp, Telegram, Messenger o Instagram.
-2. Meta/Telegram dispara el Webhook hacia `https://crm.hyperisp.com.ar/api/webhook/meta` (o `/webhook/telegram`).
+2. Meta/Telegram dispara el Webhook hacia `https://crm.hyperisp.com.ar/hypercrm/api/whatsapp-webhooks/messages` (o `/api/webhook/telegram`).
 3. HyperCRM valida la firma HMAC (Meta) o el token del bot (Telegram).
 4. Guarda una copia en `wapp_mensajes` como `ENTRANTE`.
 5. Identifica el nodo destino buscando el `identificador` en `crm_cuentas`.
@@ -216,7 +216,7 @@ Cuando el bot necesita datos del cliente:
 | ABM de Canales (crm_cuentas) | `/hypercrm/numeros` | ✅ Implementado |
 | Configuración Telegram | `/hypercrm/settings/telegram` | ✅ Implementado |
 | Configuración WhatsApp | `/hypercrm/settings/whatsapp` | ✅ Implementado |
-| Webhook Inbound Meta | `/api/webhook/meta` | ✅ Implementado |
+| Webhook Inbound Meta (WhatsApp multi-tenant) | `/hypercrm/api/whatsapp-webhooks/messages` | ✅ Implementado |
 | Webhook Inbound Telegram | `/api/webhook/telegram` | ✅ Implementado |
 | Gateway Outbound (`/api/send`) | `/api/send` | ✅ Implementado |
 | **Motor de Bot / Intents** | `/hypercrm/settings/bot` | 🔴 **Pendiente** |

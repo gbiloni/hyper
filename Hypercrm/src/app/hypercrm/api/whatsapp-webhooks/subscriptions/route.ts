@@ -52,9 +52,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Elegí al menos un campo para suscribir' }, { status: 400 });
     }
 
-    // Receptor multi-tenant (firma HMAC, motor de bot y reenvío al nodo
-    // dueño de cada phone_number_id). Reemplaza al legacy /api/webhook/meta,
-    // que quedó atado al nodo 1 y no distinguía cuentas.
+    // Receptor multi-tenant: valida firma HMAC, resuelve el nodo dueño de
+    // cada phone_number_id vía crm_cuentas, corre el motor de bot y
+    // reenvía el evento crudo al nodo correspondiente.
     const callbackUrl = `https://crm.hyperisp.com.ar/hypercrm/api/whatsapp-webhooks/messages`;
 
     const { ok, data, status } = await graphFetch(

@@ -11,7 +11,7 @@ const PUBLIC_PATHS = [
   "/api/nodos",  // Hyperportal API
   "/api/usuarios", // Hyperportal API
   "/api/check-node", // API de verificación de nodos
-  "/api/webhook", // Webhooks de Meta/Telegram (llamados por sus servidores, sin cookie de sesión)
+  "/api/webhook/telegram", // Webhook de Telegram (llamado por Telegram, sin cookie de sesión)
   "/hypercrm/api/whatsapp-webhooks/messages", // Webhook de WhatsApp multi-tenant (llamado por Meta, sin cookie de sesión)
   "/hypercrm/login", // Login de HyperCRM
   "/hypercrm/api/system", // API de branding de HyperCRM

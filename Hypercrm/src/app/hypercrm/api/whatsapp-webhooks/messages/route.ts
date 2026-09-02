@@ -47,9 +47,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ received: true });
     }
 
-    // Responder rápido a Meta (fire and forget, igual que /api/webhook/meta):
-    // el bot y el reenvío al nodo implican llamadas de red que no deben
-    // demorar el ACK del webhook.
+    // Responder rápido a Meta (fire and forget): el bot y el reenvío al
+    // nodo implican llamadas de red que no deben demorar el ACK del webhook.
     procesarPayloadAsincrono(body, rawBody).catch((err) =>
       console.error('❌ Error procesando payload asíncrono de whatsapp-webhooks/messages:', err)
     );
@@ -159,8 +158,7 @@ async function handleIncomingMessage(message: any, phoneNumberId: string, rawBod
       await evaluarBot(idNodo, phoneNumberId, phoneNumber, messageContent, conversationId, token);
     }
 
-    // Reenviar el evento crudo al nodo dueño del número, igual que hace el
-    // receptor legacy /api/webhook/meta.
+    // Reenviar el evento crudo al nodo dueño del número.
     await forwardToNodo(idNodo, rawBody);
 
   } catch (error) {
@@ -242,7 +240,7 @@ async function forwardToNodo(idNodo: number, rawBody: string) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Misma convención que /api/webhook/meta: hex crudo, sin prefijo "sha256=".
+        // Hex crudo, sin prefijo "sha256=" (convención esperada por el nodo destino).
         'X-Hub-Signature-256': crypto.createHmac('sha256', process.env.META_APP_SECRET || '').update(rawBody).digest('hex'),
       },
       body: rawBody,
