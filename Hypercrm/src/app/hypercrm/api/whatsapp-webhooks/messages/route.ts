@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 import db from '@/lib/db';
+
+const DEFAULT_VERIFY_TOKEN = 'hyperisp_meta_2026';
 
 // Webhook verification from Meta
 export async function GET(req: Request) {
@@ -8,21 +11,34 @@ export async function GET(req: Request) {
   const token = searchParams.get('hub.verify_token');
   const challenge = searchParams.get('hub.challenge');
 
-  const verifyToken = process.env.META_VERIFY_TOKEN || 'hyperisp_meta_2026';
+  const verifyToken = process.env.META_VERIFY_TOKEN || DEFAULT_VERIFY_TOKEN;
 
   if (mode === 'subscribe' && token === verifyToken) {
-    console.log('✅ Webhook verified by Meta');
+    console.log('✅ Webhook verified by Meta (whatsapp-webhooks/messages)');
     return new NextResponse(challenge, { status: 200 });
   }
 
-  console.warn('❌ Webhook verification failed');
+  console.warn('❌ Webhook verification failed (whatsapp-webhooks/messages)');
   return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
 }
 
 // Receive messages from Meta
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const signature = req.headers.get('x-hub-signature-256') || '';
+    const rawBody = await req.text();
+
+    const appSecret = process.env.META_APP_SECRET;
+    if (appSecret && signature) {
+      const expectedSig = signature.substring(7); // quita el prefijo "sha256="
+      const hash = crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+      if (hash !== expectedSig) {
+        console.warn('❌ Firma HMAC inválida en whatsapp-webhooks/messages');
+        return NextResponse.json({ error: 'invalid_signature' }, { status: 403 });
+      }
+    }
+
+    const body = JSON.parse(rawBody);
 
     // Log webhook event
     console.log('📨 Webhook received:', JSON.stringify(body, null, 2));
@@ -31,27 +47,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ received: true });
     }
 
-    for (const entry of body.entry) {
-      const wabaId = entry.id;
-
-      for (const change of entry.changes) {
-        const value = change.value;
-
-        // Process incoming messages
-        if (value.messages && value.messages.length > 0) {
-          for (const message of value.messages) {
-            await handleIncomingMessage(message, wabaId);
-          }
-        }
-
-        // Process message status updates
-        if (value.statuses && value.statuses.length > 0) {
-          for (const status of value.statuses) {
-            await handleMessageStatus(status);
-          }
-        }
-      }
-    }
+    // Responder rápido a Meta (fire and forget, igual que /api/webhook/meta):
+    // el bot y el reenvío al nodo implican llamadas de red que no deben
+    // demorar el ACK del webhook.
+    procesarPayloadAsincrono(body, rawBody).catch((err) =>
+      console.error('❌ Error procesando payload asíncrono de whatsapp-webhooks/messages:', err)
+    );
 
     return NextResponse.json({ received: true });
   } catch (error: any) {
@@ -60,34 +61,74 @@ export async function POST(req: Request) {
   }
 }
 
-async function handleIncomingMessage(message: any, wabaId: string) {
+async function procesarPayloadAsincrono(body: any, rawBody: string) {
+  for (const entry of body.entry) {
+    for (const change of entry.changes) {
+      const value = change.value;
+      const phoneNumberId = value.metadata?.phone_number_id || '';
+
+      // Process incoming messages
+      if (value.messages && value.messages.length > 0) {
+        for (const message of value.messages) {
+          await handleIncomingMessage(message, phoneNumberId, rawBody);
+        }
+      }
+
+      // Process message status updates
+      if (value.statuses && value.statuses.length > 0) {
+        for (const status of value.statuses) {
+          await handleMessageStatus(status);
+        }
+      }
+    }
+  }
+}
+
+// Busca a qué nodo/cuenta pertenece un phone_number_id (multi-tenant real).
+async function getCuentaByPhoneNumberId(phoneNumberId: string): Promise<{ id_nodo: number; token: string } | null> {
+  if (!phoneNumberId) return null;
+  const [rows]: any = await db.query(
+    `SELECT id_nodo, token FROM crm_cuentas
+     WHERE identificador = ? AND canal = 'whatsapp' AND activo = 1
+     LIMIT 1`,
+    [phoneNumberId]
+  );
+  return rows && rows.length > 0 ? rows[0] : null;
+}
+
+async function handleIncomingMessage(message: any, phoneNumberId: string, rawBody: string) {
   try {
     const phoneNumber = message.from;
     const messageId = message.id;
-    const timestamp = message.timestamp;
     const type = message.type; // text, interactive, etc.
 
     let messageContent = '';
-    if (type === 'text') {
-      messageContent = message.text.body;
-    } else if (type === 'interactive') {
-      messageContent = message.interactive?.button_reply?.title || 'Interactive message';
-    }
+    if (type === 'text') messageContent = message.text?.body || '';
+    else if (type === 'interactive') messageContent = message.interactive?.button_reply?.title || 'Interactive message';
+    else messageContent = `[Adjunto: ${type}]`;
 
-    // Default to node 1 (TODO: map WABA ID to node)
-    const idNodo = 1;
+    // Resolver el nodo dueño de este número. Sin esto, todo se guardaba
+    // (incorrectamente) bajo el nodo 1 sin importar quién lo recibió.
+    const cuenta = await getCuentaByPhoneNumberId(phoneNumberId);
+    if (!cuenta) {
+      console.warn(`[WHATSAPP-WEBHOOK] No se encontró crm_cuentas activa para phone_number_id ${phoneNumberId}`);
+      return;
+    }
+    const { id_nodo: idNodo, token } = cuenta;
 
     // Get or create conversation
     const [conversations]: any = await db.query(
-      `SELECT id FROM whatsapp_conversations
+      `SELECT id, escalated_to_agent FROM whatsapp_conversations
        WHERE id_nodo = ? AND phone_number = ?
        LIMIT 1`,
       [idNodo, phoneNumber]
     );
 
     let conversationId: number;
+    let escalated = false;
     if (conversations.length > 0) {
       conversationId = conversations[0].id;
+      escalated = !!conversations[0].escalated_to_agent;
     } else {
       const [result]: any = await db.query(
         `INSERT INTO whatsapp_conversations (id_nodo, phone_number, first_message_at)
@@ -111,10 +152,103 @@ async function handleIncomingMessage(message: any, wabaId: string) {
       [conversationId]
     );
 
-    console.log(`✅ Message saved from ${phoneNumber} in conversation ${conversationId}`);
+    console.log(`✅ Message saved from ${phoneNumber} in conversation ${conversationId} (nodo ${idNodo})`);
+
+    // Bot automático: solo si la conversación no fue escalada a un agente humano.
+    if (!escalated) {
+      await evaluarBot(idNodo, phoneNumberId, phoneNumber, messageContent, conversationId, token);
+    }
+
+    // Reenviar el evento crudo al nodo dueño del número, igual que hace el
+    // receptor legacy /api/webhook/meta.
+    await forwardToNodo(idNodo, rawBody);
 
   } catch (error) {
     console.error('❌ Error handling incoming message:', error);
+  }
+}
+
+// Motor de bot: evalúa las reglas de crm_bot_config para el nodo dueño del
+// número que recibió el mensaje, y si hay una keyword activa que matchea,
+// contesta automáticamente y lo registra como mensaje OUTBOUND.
+async function evaluarBot(idNodo: number, phoneNumberId: string, remitente: string, texto: string, conversationId: number, token: string) {
+  if (!texto) return;
+  try {
+    const [reglaRows]: any = await db.query(
+      `SELECT respuesta FROM crm_bot_config
+       WHERE id_nodo = ? AND (canal = 'whatsapp' OR canal = 'all') AND activo = 1
+         AND LOWER(?) LIKE CONCAT('%', LOWER(pregunta), '%')
+       ORDER BY orden ASC
+       LIMIT 1`,
+      [idNodo, texto]
+    );
+    if (!reglaRows || reglaRows.length === 0) return; // Sin match: queda para el agente humano.
+
+    const respuesta: string = reglaRows[0].respuesta;
+
+    const enviado = await sendWhatsAppTextReply(phoneNumberId, remitente, respuesta, token);
+    if (enviado) {
+      await db.query(
+        `INSERT INTO whatsapp_messages
+         (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
+         VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
+        [idNodo, conversationId, remitente, respuesta]
+      );
+      await db.query(`UPDATE whatsapp_conversations SET last_message_at = NOW() WHERE id = ?`, [conversationId]);
+    }
+  } catch (error) {
+    console.error('[BOT] Error evaluando/enviando respuesta automática:', error);
+  }
+}
+
+async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: string, token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to,
+        type: 'text',
+        text: { preview_url: false, body: texto },
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.messages) return true;
+    console.error('[BOT] Error de Meta enviando respuesta:', data);
+    return false;
+  } catch (err) {
+    console.error('[BOT] Excepción enviando respuesta:', err);
+    return false;
+  }
+}
+
+async function forwardToNodo(idNodo: number, rawBody: string) {
+  try {
+    const [rows]: any = await db.query(`SELECT endpoint FROM nodo WHERE id = ? LIMIT 1`, [idNodo]);
+    if (!rows || rows.length === 0 || !rows[0].endpoint) {
+      console.warn(`[WHATSAPP-WEBHOOK] Nodo ${idNodo} sin endpoint configurado, no se reenvía.`);
+      return;
+    }
+
+    const targetUrl = `${rows[0].endpoint.replace(/\/$/, '')}/chats/webhook/meta`;
+    console.log(`[WHATSAPP-WEBHOOK] Reenviando evento al Nodo ${idNodo}: ${targetUrl}`);
+
+    await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Misma convención que /api/webhook/meta: hex crudo, sin prefijo "sha256=".
+        'X-Hub-Signature-256': crypto.createHmac('sha256', process.env.META_APP_SECRET || '').update(rawBody).digest('hex'),
+      },
+      body: rawBody,
+    });
+  } catch (error) {
+    console.error('[WHATSAPP-WEBHOOK] Error reenviando al nodo:', error);
   }
 }
 

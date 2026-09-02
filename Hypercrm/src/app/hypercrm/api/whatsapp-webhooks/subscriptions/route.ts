@@ -52,10 +52,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Elegí al menos un campo para suscribir' }, { status: 400 });
     }
 
-    // Apunta al receptor real ya desplegado (firma HMAC, motor de bot y
-    // reenvío multi-nodo). El stub nuevo en /hypercrm/api/whatsapp-webhooks
-    // todavía no reemplaza a este, así que NO se cambia el callback.
-    const callbackUrl = `https://crm.hyperisp.com.ar/api/webhook/meta`;
+    // Receptor multi-tenant (firma HMAC, motor de bot y reenvío al nodo
+    // dueño de cada phone_number_id). Reemplaza al legacy /api/webhook/meta,
+    // que quedó atado al nodo 1 y no distinguía cuentas.
+    const callbackUrl = `https://crm.hyperisp.com.ar/hypercrm/api/whatsapp-webhooks/messages`;
 
     const { ok, data, status } = await graphFetch(
       `${appId}/subscriptions`,
