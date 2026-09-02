@@ -1,0 +1,405 @@
+openapi: 3.0.3
+info:
+  title: HyperISP API3
+  description: API REST para la gestión integral de HyperISP y acceso EJB (Core, Plantel, Radius, etc.)
+  version: 1.0.0
+servers:
+  - url: /hyperisp/api
+    description: Proxy Next.js Local (Inyecta Token Automáticamente)
+  - url: http://10.99.98.250:8080/api3
+    description: Roque Perez
+  - url: http://10.99.104.250:8080/api3
+    description: Gergo Makalle
+  - url: https://portal.hypermgmt.com.ar/hypermgmt-api3/api3
+    description: Entorno de Producción
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RadacctDTO:
+      type: object
+      description: Sesión de contabilidad RADIUS (radacct)
+      properties:
+        radacctid: { type: integer, format: int64, description: PK de radacct }
+        acctsessionid: { type: string, description: ID de sesión asignado por el NAS }
+        acctuniqueid: { type: string, description: ID único de sesión (FreeRADIUS) }
+        username: { type: string, description: Usuario PPPoE / MAC autenticada }
+        groupname: { type: string, description: Grupo RADIUS del usuario }
+        realm: { type: string, description: Realm de autenticación }
+        nasipaddress: { type: string, description: IP del NAS (Mikrotik/BRAS) }
+        nasportid: { type: string, description: Puerto del NAS }
+        nasporttype: { type: string, description: Tipo de puerto NAS (Ethernet, PPPoE, …) }
+        acctstarttime: { type: string, format: date-time, description: Inicio de sesión (ISO-8601) }
+        acctupdatetime: { type: string, format: date-time, description: Último Interim-Update }
+        acctstoptime: { type: string, format: date-time, description: Fin de sesión (null = activa) }
+        acctinterval: { type: integer, description: Intervalo de Interim-Update (segundos) }
+        acctsessiontime: { type: integer, format: int64, description: Duración total de la sesión (segundos) }
+        sessionTimeFormatted: { type: string, description: Duración formateada Xh Ym Zs }
+        acctauthentic: { type: string, description: Método de autenticación (RADIUS, Local, …) }
+        connectinfoStart: { type: string, description: Velocidad de conexión al inicio }
+        connectinfoStop: { type: string, description: Velocidad de conexión al cierre }
+        acctinputoctets: { type: integer, format: int64, description: Bytes recibidos por el NAS (upload del cliente) }
+        acctoutputoctets: { type: integer, format: int64, description: Bytes enviados por el NAS (download del cliente) }
+        uploadMB: { type: number, format: double, description: Upload en MB (2 decimales) }
+        downloadMB: { type: number, format: double, description: Download en MB (2 decimales) }
+        calledstationid: { type: string, description: MAC/ID del equipo de red (AP, BNG) }
+        callingstationid: { type: string, description: MAC del CPE / caller ID PPPoE }
+        acctterminatecause: { type: string, description: Causa de cierre de sesión }
+        servicetype: { type: string, description: Tipo de servicio RADIUS }
+        framedprotocol: { type: string, description: Protocolo de encapsulamiento (PPP, …) }
+        framedipaddress: { type: string, description: IP asignada al CPE }
+    RadpostauthDTO:
+      type: object
+      description: Registro de post-autenticación RADIUS (radpostauth)
+      properties:
+        id: { type: integer, description: PK de radpostauth }
+        username: { type: string, description: Usuario PPPoE / MAC autenticada }
+        pass: { type: string, description: Password enviada (puede estar en blanco en algunos NAS) }
+        reply: { type: string, description: Respuesta del servidor RADIUS (Access-Accept, Access-Reject, …) }
+        authdate: { type: string, format: date-time, description: Fecha y hora del intento de autenticación (ISO-8601) }
+        accepted: { type: boolean, description: true si la respuesta contiene 'Accept' }
+        rejected: { type: boolean, description: true si la respuesta contiene 'Reject' }
+    TicketDTO:
+      type: object
+      description: Ticket de Soporte Técnico
+      properties:
+        id: { type: integer, description: ID del Ticket }
+        alta: { type: string, format: date-time, description: Fecha de creación }
+        agendado: { type: string, format: date-time, description: Fecha agendada }
+        contratoMaestro: { type: string }
+        nombreMaestro: { type: string }
+        domicilio: { type: string }
+        tipoTicket: { type: string }
+        statusTicket: { type: string }
+        tecnico: { type: string }
+        idExterno: { type: integer }
+        observa: { type: string }
+        coordinado: { type: string, format: date-time }
+        detalleCoordina: { type: string }
+        cierre: { type: string, format: date-time }
+        celular: { type: string }
+    RadiusEquipoResponse:
+      type: object
+      properties:
+        idEquipo: { type: integer }
+        pppoeuser: { type: string }
+        radacct:
+          type: array
+          items:
+            $ref: '#/components/schemas/RadacctDTO'
+        radpostauth:
+          type: array
+          items:
+            $ref: '#/components/schemas/RadpostauthDTO'
+    RolDTO:
+      type: object
+      description: Rol de usuario en el sistema
+      properties:
+        id: { type: integer, description: ID del rol }
+        rol: { type: string, description: Código o nombre del rol }
+        nombre: { type: string, description: Nombre descriptivo del rol }
+    UsuarioDTO:
+      type: object
+      description: Usuario del sistema y operadores
+      properties:
+        id: { type: string, description: Identificador o nombre de usuario }
+        nombre: { type: string, description: Nombre completo del operador }
+        es_admin: { type: boolean, description: true si tiene permisos de administrador }
+        activo: { type: boolean, description: Estado de actividad del usuario }
+        first_login: { type: boolean, description: true si debe cambiar clave al ingresar }
+        telefono: { type: string, description: Teléfono de contacto }
+        mail: { type: string, description: Correo electrónico }
+        tecnico: { type: boolean, description: true si es técnico }
+        fecha_alta: { type: string, description: Fecha de alta formato yyyy-MM-dd HH:mm:ss }
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RolDTO'
+    UsuarioInputDTO:
+      type: object
+      description: Payload para creación y modificación de usuario
+      properties:
+        id: { type: string }
+        nombre: { type: string }
+        clave: { type: string }
+        es_admin: { type: boolean }
+        activo: { type: boolean }
+        first_login: { type: boolean }
+        telefono: { type: string }
+        mail: { type: string }
+        tecnico: { type: boolean }
+        roles:
+          type: array
+          items: { type: integer }
+security:
+  - bearerAuth: []
+paths:
+  /clientes/{id}/equipos:
+    get:
+      summary: Obtener equipos de un cliente
+      tags:
+        - Clientes
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+          description: ID del Maestro (Cliente)
+      responses:
+        '200':
+          description: Lista de equipos del cliente
+  /plantel/equipo/{idEquipo}/diagnostico:
+    get:
+      summary: Diagnóstico de Red del Equipo (Mikrotik/Radius/DHCP)
+      tags:
+        - Plantel
+      parameters:
+        - in: path
+          name: idEquipo
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Estado del diagnóstico de red
+  /plantel/hardware/{mac}:
+    get:
+      summary: Diagnóstico Físico Multitecnología (FTTH, EOC, DOCSIS)
+      tags:
+        - Plantel
+      parameters:
+        - in: path
+          name: mac
+          required: true
+          schema:
+            type: string
+          description: Dirección MAC del CPE (CPE_MAC)
+      responses:
+        '200':
+          description: Telemetría en vivo del hardware físico
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cpe_mac:
+                    type: string
+                  ftth:
+                    type: object
+                    description: Datos si existe en FTTH
+                  eoc:
+                    type: object
+                    description: Datos si existe en EOC
+                  docsis:
+                    type: object
+                    description: Datos si existe en DOCSIS
+  /radius/usuario/{username}/sesiones:
+    get:
+      tags: [Radius]
+      summary: Sesiones RADIUS de un usuario PPPoE
+      description: Retorna todas las sesiones (radacct) del usuario dado, ordenadas por fecha de inicio descendente. Limit por defecto 200.
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+          description: Usuario PPPoE (ej. "cliente001") o MAC DHCP
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200 }
+          description: Cantidad máxima de sesiones a retornar
+      responses:
+        '200':
+          description: Lista de sesiones
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RadacctDTO' }
+        '404':
+          description: Usuario sin sesiones registradas
+        '500':
+          description: Error interno del servidor
+  /radius/usuario/{username}/postauth:
+    get:
+      tags: [Radius]
+      summary: Historial de autenticaciones de un usuario
+      description: Retorna los registros de post-autenticación (radpostauth) del usuario. Incluye intentos aceptados y rechazados. Limit por defecto 200.
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200 }
+      responses:
+        '200':
+          description: Lista de intentos de autenticación
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RadpostauthDTO' }
+        '500':
+          description: Error interno
+  /radius/equipo/{idEquipo}:
+    get:
+      tags: [Radius]
+      summary: Datos RADIUS completos de un equipo (por ID de BD)
+      description: Dado el ID del equipo en la base de datos, retorna sus sesiones radacct + registros radpostauth agrupados en un objeto JSON.
+      parameters:
+        - name: idEquipo
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID de la tabla `equipo`
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200 }
+      responses:
+        '200':
+          description: Objeto que agrupa radacct y radpostauth
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RadiusEquipoResponse' }
+        '404':
+          description: Equipo no encontrado
+        '500':
+          description: Error interno
+  /tickets/cliente/{idMaestro}:
+    get:
+      tags: [Tickets]
+      summary: Tickets de un cliente
+      description: Retorna el historial de tickets de un cliente
+      parameters:
+        - name: idMaestro
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID del Maestro (Cliente)
+      responses:
+        '200':
+          description: Lista de tickets
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TicketDTO' }
+        '404':
+          description: Cliente no encontrado
+        '500':
+          description: Error interno
+  /usuarios:
+    get:
+      tags: [Usuarios]
+      summary: Listar todos los usuarios del sistema
+      description: Retorna la lista completa de operadores y usuarios del sistema con sus roles asociados
+      responses:
+        '200':
+          description: Lista de usuarios
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/UsuarioDTO' }
+    post:
+      tags: [Usuarios]
+      summary: Crear un nuevo usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsuarioInputDTO' }
+      responses:
+        '200':
+          description: Usuario creado exitosamente
+  /usuarios/{id}:
+    get:
+      tags: [Usuarios]
+      summary: Obtener usuario por ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Datos del usuario
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/UsuarioDTO' }
+    put:
+      tags: [Usuarios]
+      summary: Actualizar datos del usuario
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsuarioInputDTO' }
+      responses:
+        '200':
+          description: Usuario actualizado exitosamente
+    delete:
+      tags: [Usuarios]
+      summary: Eliminar un usuario
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Usuario eliminado o desactivado
+  /usuarios/{id}/roles:
+    put:
+      tags: [Usuarios]
+      summary: Asignar o actualizar roles de un usuario
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { type: integer }
+      responses:
+        '200':
+          description: Roles actualizados exitosamente
+  /roles:
+    get:
+      tags: [Roles]
+      summary: Listar todos los roles del sistema
+      responses:
+        '200':
+          description: Lista de roles disponibles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RolDTO' }

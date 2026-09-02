@@ -1,0 +1,13 @@
+/* Reuse NodoModal.css styles by relying on the same classes, 
+   but we can add specifics here if needed. 
+   For now, we just import it to ensure it exists if NodoModal wasn't loaded. */
+@import './NodoModal.css';
+
+.nodos-checklist {
+  background-color: rgba(0,0,0,0.2);
+  border: 1px solid var(--border-color);
+}
+
+.nodos-checklist label:hover {
+  color: var(--neon-cyan);
+}

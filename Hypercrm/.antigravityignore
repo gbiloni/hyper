@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.gemini
+.agent
+.codex
+openspec
+*.log
+package-lock.json
+*.tsbuildinfo

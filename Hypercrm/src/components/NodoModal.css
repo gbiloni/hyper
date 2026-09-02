@@ -1,0 +1,195 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-container {
+  background: var(--bg-color-panel);
+  border: 1px solid var(--neon-cyan-dim);
+  border-radius: 6px;
+  width: 500px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 0 40px rgba(0, 243, 255, 0.1), 0 20px 60px rgba(0, 0, 0, 0.8);
+  animation: slideUp 0.25s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.2rem 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+  font-family: var(--font-family-display);
+  font-size: 1.1rem;
+  color: var(--neon-cyan);
+  letter-spacing: 2px;
+  margin: 0;
+}
+
+.modal-close {
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  transition: color var(--transition-speed);
+  padding: 0.25rem;
+}
+
+.modal-close:hover {
+  color: var(--neon-pink);
+  text-shadow: 0 0 8px var(--neon-pink-glow);
+}
+
+.modal-error {
+  margin: 1rem 1.5rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--neon-pink-dim);
+  border: 1px solid var(--neon-pink);
+  border-radius: 4px;
+  color: var(--neon-pink);
+  font-family: var(--font-family-display);
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+}
+
+.modal-form {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.form-row label {
+  font-family: var(--font-family-display);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+}
+
+.form-row input,
+.form-row select,
+.form-row textarea {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 0.65rem 0.85rem;
+  color: var(--text-primary);
+  font-family: var(--font-family-base);
+  font-size: 1rem;
+  outline: none;
+  transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
+}
+
+.form-row input:focus,
+.form-row select:focus,
+.form-row textarea:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 8px var(--neon-cyan-dim);
+}
+
+.form-row select {
+  cursor: pointer;
+}
+
+.form-row select option {
+  background: var(--bg-color-panel);
+  color: var(--text-primary);
+}
+
+.form-row textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+  margin-top: 0.5rem;
+}
+
+.btn-cancel {
+  font-family: var(--font-family-display);
+  padding: 0.6rem 1.5rem;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+  transition: all var(--transition-speed);
+}
+
+.btn-cancel:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.btn-save {
+  font-family: var(--font-family-display);
+  padding: 0.6rem 1.5rem;
+  border: 1px solid var(--neon-cyan);
+  background: var(--neon-cyan-dim);
+  color: var(--neon-cyan);
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+  transition: all var(--transition-speed);
+}
+
+.btn-save:hover:not(:disabled) {
+  background: rgba(0, 243, 255, 0.3);
+  box-shadow: 0 0 15px var(--neon-cyan-glow);
+  color: #fff;
+}
+
+.btn-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkbox-row {
+  flex-direction: row !important;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--neon-cyan);
+  cursor: pointer;
+}
