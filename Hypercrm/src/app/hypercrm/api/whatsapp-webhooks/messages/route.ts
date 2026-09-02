@@ -47,9 +47,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ received: true });
     }
 
-    // Responder rápido a Meta (fire and forget): el bot y el reenvío al
-    // nodo implican llamadas de red que no deben demorar el ACK del webhook.
-    procesarPayloadAsincrono(body, rawBody).catch((err) =>
+    // Responder rápido a Meta (fire and forget): guardar en la BD y evaluar
+    // el bot implican llamadas de red/DB que no deben demorar el ACK.
+    procesarPayloadAsincrono(body).catch((err) =>
       console.error('❌ Error procesando payload asíncrono de whatsapp-webhooks/messages:', err)
     );
 
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
   }
 }
 
-async function procesarPayloadAsincrono(body: any, rawBody: string) {
+async function procesarPayloadAsincrono(body: any) {
   for (const entry of body.entry) {
     for (const change of entry.changes) {
       const value = change.value;
@@ -69,7 +69,7 @@ async function procesarPayloadAsincrono(body: any, rawBody: string) {
       // Process incoming messages
       if (value.messages && value.messages.length > 0) {
         for (const message of value.messages) {
-          await handleIncomingMessage(message, phoneNumberId, rawBody);
+          await handleIncomingMessage(message, phoneNumberId);
         }
       }
 
@@ -95,7 +95,7 @@ async function getCuentaByPhoneNumberId(phoneNumberId: string): Promise<{ id_nod
   return rows && rows.length > 0 ? rows[0] : null;
 }
 
-async function handleIncomingMessage(message: any, phoneNumberId: string, rawBody: string) {
+async function handleIncomingMessage(message: any, phoneNumberId: string) {
   try {
     const phoneNumber = message.from;
     const messageId = message.id;
@@ -154,12 +154,12 @@ async function handleIncomingMessage(message: any, phoneNumberId: string, rawBod
     console.log(`✅ Message saved from ${phoneNumber} in conversation ${conversationId} (nodo ${idNodo})`);
 
     // Bot automático: solo si la conversación no fue escalada a un agente humano.
+    // El flujo termina acá: hypercrm guarda y (si corresponde) contesta.
+    // No se reenvía nada a los nodos — ellos leen/escriben directo contra
+    // esta misma base (hyper) según los números y permisos que tengan.
     if (!escalated) {
       await evaluarBot(idNodo, phoneNumberId, phoneNumber, messageContent, conversationId, token);
     }
-
-    // Reenviar el evento crudo al nodo dueño del número.
-    await forwardToNodo(idNodo, rawBody);
 
   } catch (error) {
     console.error('❌ Error handling incoming message:', error);
@@ -222,31 +222,6 @@ async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: s
   } catch (err) {
     console.error('[BOT] Excepción enviando respuesta:', err);
     return false;
-  }
-}
-
-async function forwardToNodo(idNodo: number, rawBody: string) {
-  try {
-    const [rows]: any = await db.query(`SELECT endpoint FROM nodo WHERE id = ? LIMIT 1`, [idNodo]);
-    if (!rows || rows.length === 0 || !rows[0].endpoint) {
-      console.warn(`[WHATSAPP-WEBHOOK] Nodo ${idNodo} sin endpoint configurado, no se reenvía.`);
-      return;
-    }
-
-    const targetUrl = `${rows[0].endpoint.replace(/\/$/, '')}/chats/webhook/meta`;
-    console.log(`[WHATSAPP-WEBHOOK] Reenviando evento al Nodo ${idNodo}: ${targetUrl}`);
-
-    await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Hex crudo, sin prefijo "sha256=" (convención esperada por el nodo destino).
-        'X-Hub-Signature-256': crypto.createHmac('sha256', process.env.META_APP_SECRET || '').update(rawBody).digest('hex'),
-      },
-      body: rawBody,
-    });
-  } catch (error) {
-    console.error('[WHATSAPP-WEBHOOK] Error reenviando al nodo:', error);
   }
 }
 
