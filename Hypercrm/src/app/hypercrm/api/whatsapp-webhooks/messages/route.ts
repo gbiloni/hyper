@@ -182,7 +182,14 @@ async function evaluarBot(idNodo: number, phoneNumberId: string, remitente: stri
     );
     if (!reglaRows || reglaRows.length === 0) return; // Sin match: queda para el agente humano.
 
-    const respuesta: string = reglaRows[0].respuesta;
+    let respuesta: string = reglaRows[0].respuesta;
+
+    // Si la plantilla necesita datos del cliente (nombre, saldo), se piden al
+    // backend Java (API3) del nodo dueño del número — misma convención que ya
+    // usa el bot de Telegram (nodo.endpoint + nodo.token como Bearer).
+    if (respuesta.includes('{nombre}') || respuesta.includes('{saldo}')) {
+      respuesta = await enriquecerConDatosCliente(idNodo, remitente, respuesta);
+    }
 
     const enviado = await sendWhatsAppTextReply(phoneNumberId, remitente, respuesta, token);
     if (enviado) {
@@ -196,6 +203,39 @@ async function evaluarBot(idNodo: number, phoneNumberId: string, remitente: stri
     }
   } catch (error) {
     console.error('[BOT] Error evaluando/enviando respuesta automática:', error);
+  }
+}
+
+// Reemplaza {nombre}/{saldo} en la plantilla consultando el backend Java del
+// nodo (mismo endpoint que usa el bot de Telegram: GET /clientes?celular=).
+// Si falla o el nodo no tiene endpoint configurado, deja la plantilla como
+// vino — mejor mandar el placeholder sin resolver que dejar al cliente sin
+// respuesta.
+async function enriquecerConDatosCliente(idNodo: number, celular: string, respuesta: string): Promise<string> {
+  try {
+    const [nodoRows]: any = await db.query('SELECT endpoint, token FROM nodo WHERE id = ?', [idNodo]);
+    if (!nodoRows || nodoRows.length === 0 || !nodoRows[0].endpoint) return respuesta;
+    const nodo = nodoRows[0];
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (nodo.token) headers['Authorization'] = `Bearer ${nodo.token}`;
+
+    const apiRes = await fetch(
+      `${nodo.endpoint.replace(/\/$/, '')}/clientes?celular=${encodeURIComponent(celular)}`,
+      { headers }
+    );
+    if (!apiRes.ok) return respuesta;
+
+    const clienteData = await apiRes.json();
+    const cliente = clienteData?.cliente || clienteData;
+    if (cliente?.nombre) respuesta = respuesta.replace(/{nombre}/g, cliente.nombre);
+    if (clienteData?.saldo !== undefined) {
+      respuesta = respuesta.replace(/{saldo}/g, `$${Number(clienteData.saldo).toLocaleString('es-AR')}`);
+    }
+    return respuesta;
+  } catch (error) {
+    console.warn('[BOT] No se pudo enriquecer con datos del cliente:', error);
+    return respuesta;
   }
 }
 
