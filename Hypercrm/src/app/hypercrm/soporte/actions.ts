@@ -1,140 +1,184 @@
 "use server";
 
-import { getApiConfig } from "@/lib/getApiConfig";
+import { cookies } from "next/headers";
 
+// Todas las acciones de esta pantalla operan sobre el nodo activo del
+// operador (cookie que setea el login de Hypercrm, no confundir con las
+// cookies "hyperisp_active_*" que usa el login de Hyperisp).
+async function getIdNodoActivo(): Promise<number> {
+  const cookieStore = await cookies();
+  return parseInt(cookieStore.get("hyperisp_active_node_id")?.value || "1", 10);
+}
+
+// Ficha CRM del cliente: se consulta directo al backend Java (API3) del nodo
+// dueño de la conversación, igual que hace el bot (nodo.endpoint + nodo.token
+// como Bearer). No depende de cookies de sesión de Hyperisp.
 export async function getClienteByCelular(celular: string) {
   try {
-    const { apiUrl, token } = await getApiConfig();
-    
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    };
-    
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    const idNodo = await getIdNodoActivo();
+    const { default: pool } = await import('@/lib/db');
+    const [nodoRows]: any = await pool.query('SELECT endpoint, token FROM nodo WHERE id = ?', [idNodo]);
 
-    let response = await fetch(`${apiUrl}/clientes?celular=${encodeURIComponent(celular)}`, {
-      method: 'GET',
-      headers,
-      cache: 'no-store'
-    });
+    if (!nodoRows || nodoRows.length === 0 || !nodoRows[0].endpoint) {
+      return { error: 'El nodo activo no tiene endpoint de API (Java) configurado.' };
+    }
+    const { endpoint, token } = nodoRows[0];
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(
+      `${String(endpoint).replace(/\/$/, '')}/clientes?celular=${encodeURIComponent(celular)}`,
+      { method: 'GET', headers, cache: 'no-store' }
+    );
 
     if (!response.ok) {
-      response = await fetch(`${apiUrl}/clientes/1/dashboard`, {
-        method: 'GET',
-        headers,
-        cache: 'no-store'
-      });
-      if (!response.ok) {
-        return { error: `No se encontró cliente con celular ${celular} y falló fallback.` };
-      }
+      return { error: `No se encontró cliente con celular ${celular} en el nodo activo.` };
     }
 
     const data = await response.json();
     return { data };
   } catch (error: any) {
     console.error("Error al obtener cliente por celular:", error);
-    return { error: "Error de comunicación con Java." };
+    return { error: "Error de comunicación con el backend del nodo." };
   }
 }
 
+// Bandeja: lee conversaciones y mensajes reales de whatsapp_conversations /
+// whatsapp_messages (lo que efectivamente escribe el webhook de Meta), no de
+// la tabla legacy wapp_mensajes que usaba el bot de Telegram.
 export async function getChatsOmnicanal() {
   try {
+    const idNodo = await getIdNodoActivo();
     const { default: pool } = await import('@/lib/db');
-    
-    // Obtenemos los últimos mensajes agrupados por remitente (simplificado para mostrar en bandeja)
-    const sql = `
-      SELECT 
-        remitente_nro as phone,
-        canal as channel,
-        MAX(fecha_recepcion) as last_time,
-        SUM(CASE WHEN leido = 0 AND direccion = 'ENTRANTE' THEN 1 ELSE 0 END) as unread,
-        (SELECT cuerpo_mensaje FROM wapp_mensajes wm2 WHERE wm2.remitente_nro = wm.remitente_nro ORDER BY fecha_recepcion DESC LIMIT 1) as lastMessage
-      FROM wapp_mensajes wm
-      GROUP BY remitente_nro, canal
-      ORDER BY last_time DESC
-      LIMIT 50
-    `;
-    
-    const [rows]: any = await pool.query(sql);
-    
-    if (rows && rows.length > 0) {
-      const chats = await Promise.all(rows.map(async (row: any, index: number) => {
-        // Para cada chat, traemos los últimos mensajes (historial)
-        const msgSql = `
-          SELECT id, cuerpo_mensaje as text, direccion, DATE_FORMAT(fecha_recepcion, '%h:%i %p') as time
-          FROM wapp_mensajes
-          WHERE remitente_nro = ?
-          ORDER BY id ASC
-          LIMIT 50
-        `;
-        const [msgRows]: any = await pool.query(msgSql, [row.phone]);
-        
-        const messages = msgRows.map((m: any) => ({
-          id: String(m.id),
-          sender: m.direccion === 'ENTRANTE' ? 'client' : 'agent',
-          text: m.text || '',
-          time: m.time
-        }));
 
-        return {
-          id: String(index + 1), // O usar remitente_nro
-          name: row.phone, // Por ahora el nombre es el teléfono (hasta vincular con cliente)
-          phone: row.phone,
-          avatar: row.phone.substring(0, 2),
-          channel: row.channel || 'whatsapp',
-          lastMessage: row.lastMessage || 'Mensaje adjunto',
-          time: new Date(row.last_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          unread: Number(row.unread) || 0,
-          botActive: false,
-          messages
-        };
+    const [convRows]: any = await pool.query(
+      `SELECT id, phone_number, user_name, escalated_to_agent, last_message_at
+       FROM whatsapp_conversations
+       WHERE id_nodo = ?
+       ORDER BY last_message_at DESC
+       LIMIT 50`,
+      [idNodo]
+    );
+
+    if (!convRows || convRows.length === 0) return { chats: [] };
+
+    const fmtHora = (d: any) => d ? new Date(d).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) : '';
+
+    const chats = await Promise.all(convRows.map(async (conv: any) => {
+      const [msgRows]: any = await pool.query(
+        `SELECT id, direction, message_type, content, status, created_at
+         FROM whatsapp_messages
+         WHERE conversation_id = ?
+         ORDER BY id ASC
+         LIMIT 200`,
+        [conv.id]
+      );
+
+      // "No leído" = mensajes entrantes posteriores a la última respuesta
+      // saliente (no hay columna "leido" en este esquema, a diferencia de
+      // la tabla legacy wapp_mensajes).
+      let lastOutboundAt: Date | null = null;
+      for (let i = msgRows.length - 1; i >= 0; i--) {
+        if (msgRows[i].direction === 'OUTBOUND') { lastOutboundAt = new Date(msgRows[i].created_at); break; }
+      }
+      const unread = msgRows.filter((m: any) =>
+        m.direction === 'INBOUND' && (!lastOutboundAt || new Date(m.created_at) > lastOutboundAt)
+      ).length;
+
+      const messages = msgRows.map((m: any) => ({
+        id: String(m.id),
+        sender: m.direction === 'INBOUND' ? 'client' : 'agent',
+        text: m.content || (m.message_type ? `[Adjunto: ${m.message_type}]` : ''),
+        time: fmtHora(m.created_at),
+        read: m.direction === 'INBOUND' ? true : m.status === 'READ',
       }));
 
-      return { chats };
-    }
-    
-    return { chats: [] };
+      const ultimo = msgRows[msgRows.length - 1];
+      const nombreOTelefono = conv.user_name || conv.phone_number;
+
+      return {
+        id: String(conv.id),
+        name: nombreOTelefono,
+        phone: conv.phone_number,
+        avatar: String(nombreOTelefono).substring(0, 2).toUpperCase(),
+        channel: 'whatsapp',
+        lastMessage: ultimo?.content || (ultimo ? `[Adjunto: ${ultimo.message_type}]` : ''),
+        time: fmtHora(conv.last_message_at),
+        unread,
+        botActive: !conv.escalated_to_agent,
+        messages,
+      };
+    }));
+
+    return { chats };
   } catch (err) {
-    console.error("Error al obtener chats locales de wapp_mensajes:", err);
+    console.error("Error al obtener conversaciones de WhatsApp:", err);
     return { chats: [] };
   }
 }
 
-export async function enviarMensajeMeta(chatId: string, phone: string, message: string) {
+// Envío manual del operador desde la bandeja. Se resuelve acá directo (DB +
+// Meta) en vez de pegarle por HTTP a /api/whatsapp-send-message: esta acción
+// ya corre server-side en el mismo proceso, y un self-fetch dependería de
+// NEXT_PUBLIC_APP_URL, que no está configurado en .env.local (caería a
+// localhost:3001, casi seguro incorrecto en producción).
+export async function enviarMensajeMeta(_chatId: string, phone: string, message: string) {
   try {
-    // Si no necesitamos Java, enviamos usando nuestro propio endpoint Outbound Centralizado de NextJS
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3001";
-    
-    // Buscamos el canal activo por el phone
+    const idNodo = await getIdNodoActivo();
     const { default: pool } = await import('@/lib/db');
-    const [rows]: any = await pool.query(
-      "SELECT canal, identificador FROM crm_cuentas WHERE activo = 1 ORDER BY id ASC LIMIT 1"
+
+    const [cuentaRows]: any = await pool.query(
+      `SELECT identificador, token FROM crm_cuentas
+       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1 LIMIT 1`,
+      [idNodo]
     );
-    
-    if (rows && rows.length > 0) {
-      const canal = rows[0].canal;
-      const cuentaEmisora = rows[0].identificador;
-      
-      const response = await fetch(`${appUrl}/api/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          canal: canal, 
-          cuenta_emisora: cuentaEmisora, 
-          destinatario: phone, 
-          texto: message 
-        })
-      });
-
-      if (response.ok) {
-        return { success: true };
-      }
+    if (!cuentaRows || cuentaRows.length === 0) {
+      return { success: false, error: 'No hay número de WhatsApp configurado para este nodo.' };
     }
-  } catch (err) {
-    console.error("Error enviando mensaje por API Centralizada:", err);
-  }
+    const phoneNumberId = cuentaRows[0].identificador;
+    const token = cuentaRows[0].token;
 
-  return { success: false };
+    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp', recipient_type: 'individual', to: phone,
+        type: 'text', text: { preview_url: false, body: message },
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.messages) {
+      console.error('[SOPORTE] Error de Meta enviando respuesta manual:', data);
+      return { success: false, error: 'Meta rechazó el envío.' };
+    }
+    const wabaMessageId: string | null = data.messages[0]?.id || null;
+
+    const [convRows]: any = await pool.query(
+      `SELECT id FROM whatsapp_conversations WHERE id_nodo = ? AND phone_number = ? LIMIT 1`,
+      [idNodo, phone]
+    );
+    const conversationId = convRows?.[0]?.id || null;
+
+    await pool.query(
+      `INSERT INTO whatsapp_messages
+       (id_nodo, conversation_id, phone_number, direction, message_type, content, waba_message_id, status)
+       VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, ?, 'SENT')`,
+      [idNodo, conversationId, phone, message, wabaMessageId]
+    );
+
+    // Un humano acaba de escribirle a este cliente: el bot deja de
+    // contestarle en esta conversación hasta que alguien la reabra.
+    if (conversationId) {
+      await pool.query(
+        `UPDATE whatsapp_conversations SET last_message_at = NOW(), escalated_to_agent = 1 WHERE id = ?`,
+        [conversationId]
+      );
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error("Error enviando mensaje manual de WhatsApp:", err);
+    return { success: false, error: 'Excepción al enviar.' };
+  }
 }

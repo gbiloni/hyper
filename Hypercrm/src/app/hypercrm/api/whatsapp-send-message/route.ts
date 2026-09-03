@@ -5,7 +5,7 @@ import { cookies } from 'next/headers';
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { phone_number, message_type, content, template_id, variables } = body;
+    const { phone_number, message_type, content, template_id, variables, mark_escalated } = body;
 
     if (!phone_number || !message_type) {
       return NextResponse.json(
@@ -99,7 +99,7 @@ export async function POST(req: Request) {
 
     // Send to Meta API
     const response = await fetch(
-      `https://graph.instagram.com/v20.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
       {
         method: 'POST',
         headers: {
@@ -137,6 +137,19 @@ export async function POST(req: Request) {
        VALUES (?, ?, ?, 'OUTBOUND', ?, ?, ?, ?, 'SENT')`,
       [idNodo, conversationId, phone_number, message_type, content || '', template_id || null, messageId]
     );
+
+    // Escalado a agente humano: opt-in explícito (lo pide la bandeja de
+    // soporte cuando un operador contesta manual). No se activa solo, para
+    // no silenciar el bot si en el futuro este endpoint se usa también para
+    // envíos automáticos (ej. campañas de plantillas).
+    if (conversationId && mark_escalated) {
+      await db.query(
+        `UPDATE whatsapp_conversations SET last_message_at = NOW(), escalated_to_agent = 1 WHERE id = ?`,
+        [conversationId]
+      );
+    } else if (conversationId) {
+      await db.query(`UPDATE whatsapp_conversations SET last_message_at = NOW() WHERE id = ?`, [conversationId]);
+    }
 
     console.log(`✅ Message sent to ${phone_number}`);
 

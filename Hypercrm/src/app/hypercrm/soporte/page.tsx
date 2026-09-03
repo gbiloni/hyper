@@ -63,11 +63,17 @@ export default function SoportePage() {
     if (!silent) setRefreshing(true);
     const res = await getChatsOmnicanal();
     if (res?.chats) {
+      // Los mensajes vienen siempre del servidor (fuente de verdad); no se
+      // preserva el array local salvo para no perder el eco optimista de un
+      // envío que todavía no confirmó el próximo refresh.
       setChats(prev => {
         const map = new Map(prev.map(c => [c.id, c]));
         res.chats.forEach((c: Chat) => {
-          if (!map.has(c.id)) map.set(c.id, c);
-          else map.set(c.id, { ...map.get(c.id)!, ...c, messages: map.get(c.id)!.messages });
+          const anterior = map.get(c.id);
+          if (!anterior) { map.set(c.id, c); return; }
+          const idsServidor = new Set((c.messages || []).map(m => m.id));
+          const optimistas = (anterior.messages || []).filter(m => !idsServidor.has(m.id) && m.id.startsWith('m'));
+          map.set(c.id, { ...anterior, ...c, messages: [...(c.messages || []), ...optimistas] });
         });
         return Array.from(map.values());
       });
