@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import db from '@/lib/db';
+import { formatearDestinoWhatsAppAR } from '@/lib/whatsappPhone';
 
 const DEFAULT_VERIFY_TOKEN = 'hyperisp_meta_2026';
 
@@ -77,6 +78,14 @@ async function procesarPayloadAsincrono(body: any) {
       if (value.statuses && value.statuses.length > 0) {
         for (const status of value.statuses) {
           await handleMessageStatus(status);
+        }
+      }
+
+      // Process calling events (Calling API vía SIP: field "calls",
+      // eventos call_created/terminate — mismo webhook que los mensajes)
+      if (value.calls && value.calls.length > 0) {
+        for (const call of value.calls) {
+          await handleCallEvent(call, phoneNumberId);
         }
       }
     }
@@ -250,7 +259,7 @@ async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: s
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to,
+        to: formatearDestinoWhatsAppAR(to),
         type: 'text',
         text: { preview_url: false, body: texto },
       }),
@@ -287,5 +296,92 @@ async function handleMessageStatus(status: any) {
 
   } catch (error) {
     console.error('❌ Error handling message status:', error);
+  }
+}
+
+// Llamadas por WhatsApp (Calling API vía SIP). Meta manda dos eventos por
+// llamada -- "call_created" al iniciarse y "terminate" al cortarse -- y
+// puede reintentar la entrega del webhook hasta 7 días si no responde 200,
+// por eso todo esto es idempotente por wa_call_id (ON DUPLICATE KEY / update
+// dirigido) en vez de un INSERT liso que duplicaría la fila en cada retry.
+function unixSegundosADate(ts: unknown): Date | null {
+  const n = Number(ts);
+  return Number.isFinite(n) && n > 0 ? new Date(n * 1000) : null;
+}
+
+async function handleCallEvent(call: any, phoneNumberId: string) {
+  try {
+    const waCallId: string | undefined = call.id;
+    if (!waCallId) return;
+
+    const cuenta = await getCuentaByPhoneNumberId(phoneNumberId);
+    if (!cuenta) {
+      console.warn(`[WHATSAPP-CALL] No se encontró crm_cuentas activa para phone_number_id ${phoneNumberId}`);
+      return;
+    }
+    const { id_nodo: idNodo } = cuenta;
+
+    // BUSINESS_INITIATED = la iniciamos nosotros (OUTBOUND); cualquier otro
+    // valor (USER_INITIATED) es el cliente llamando (INBOUND).
+    const direction: 'INBOUND' | 'OUTBOUND' = call.direction === 'BUSINESS_INITIATED' ? 'OUTBOUND' : 'INBOUND';
+    const phoneNumberCliente: string = direction === 'OUTBOUND' ? call.to : call.from;
+
+    const [convRows]: any = await db.query(
+      `SELECT id FROM whatsapp_conversations WHERE id_nodo = ? AND phone_number = ? LIMIT 1`,
+      [idNodo, phoneNumberCliente]
+    );
+    const conversationId = convRows?.[0]?.id || null;
+
+    if (call.event === 'call_created') {
+      await db.query(
+        `INSERT INTO crm_llamadas
+         (id_nodo, conversation_id, wa_call_id, phone_number, direction, start_time, raw_created_payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE raw_created_payload = VALUES(raw_created_payload)`,
+        [idNodo, conversationId, waCallId, phoneNumberCliente, direction, unixSegundosADate(call.timestamp), JSON.stringify(call)]
+      );
+      console.log(`📞 Llamada creada ${waCallId} (${direction}) nodo ${idNodo}`);
+      return;
+    }
+
+    if (call.event === 'terminate') {
+      const [result]: any = await db.query(
+        `UPDATE crm_llamadas SET
+           status = ?,
+           start_time = COALESCE(?, start_time),
+           end_time = ?,
+           duration_seconds = ?,
+           raw_terminate_payload = ?
+         WHERE wa_call_id = ?`,
+        [
+          call.status || null,
+          unixSegundosADate(call.start_time),
+          unixSegundosADate(call.end_time),
+          typeof call.duration === 'number' ? call.duration : null,
+          JSON.stringify(call),
+          waCallId,
+        ]
+      );
+
+      // Si nunca llegó (o se perdió) el call_created, dejamos igual el
+      // registro final -- mejor tener el resultado sin el arranque que no
+      // tener nada.
+      if (!result.affectedRows) {
+        await db.query(
+          `INSERT INTO crm_llamadas
+           (id_nodo, conversation_id, wa_call_id, phone_number, direction, status, start_time, end_time, duration_seconds, raw_terminate_payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE status = VALUES(status)`,
+          [
+            idNodo, conversationId, waCallId, phoneNumberCliente, direction,
+            call.status || null, unixSegundosADate(call.start_time), unixSegundosADate(call.end_time),
+            typeof call.duration === 'number' ? call.duration : null, JSON.stringify(call),
+          ]
+        );
+      }
+      console.log(`📞 Llamada terminada ${waCallId}: ${call.status || 'sin status'}`);
+    }
+  } catch (error) {
+    console.error('❌ Error handling call event:', error);
   }
 }

@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { getClienteByCelular, getChatsOmnicanal, enviarMensajeMeta } from "./actions";
-import { UserCircle, Phone, MapPin, CreditCard, Activity, Search, Send, Bot, User, CheckCheck, Check, FileText, Settings, Zap, MessageSquare, MessageCircle, RefreshCw } from "lucide-react";
+import { UserCircle, Phone, PhoneCall, MapPin, CreditCard, Activity, Search, Send, Bot, User, CheckCheck, Check, FileText, Settings, Zap, MessageSquare, MessageCircle, RefreshCw } from "lucide-react";
+import { useSoftphone } from "@/context/SoftphoneContext";
+import { formatearDestinoWhatsAppAR } from "@/lib/whatsappPhone";
 
 // Instagram fue eliminado de lucide-react v1.x — SVG inline oficial
 function Instagram({ className }: { className?: string }) {
@@ -56,23 +58,38 @@ export default function SoportePage() {
   const [typing, setTyping]             = useState(false);
   const [sending, setSending]           = useState(false);
   const [refreshing, setRefreshing]     = useState(false);
+  const { marcar, estado: estadoSoftphone } = useSoftphone();
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
+
+  // Más que el intervalo de refresco (15s): le da margen al POST hacia Meta +
+  // el insert en la base para terminar antes de que se descarte el eco local.
+  const OPTIMISTIC_TTL_MS = 20000;
 
   const loadChats = async (silent = false) => {
     if (!silent) setRefreshing(true);
     const res = await getChatsOmnicanal();
     if (res?.chats) {
-      // Los mensajes vienen siempre del servidor (fuente de verdad); no se
-      // preserva el array local salvo para no perder el eco optimista de un
-      // envío que todavía no confirmó el próximo refresh.
+      // Los mensajes vienen siempre del servidor (fuente de verdad). Lo único
+      // que se preserva del estado local es el eco optimista de un envío
+      // reciente que el servidor todavía no reflejó. Se descarta apenas el
+      // servidor ya trae un mensaje de agente con el mismo texto (o sea, ya
+      // impactó en la base) — comparar por ID no sirve porque el id real
+      // (autoincremental de MySQL) nunca coincide con el id local ("m" +
+      // timestamp). El TTL de 20s queda como red de seguridad nada más, para
+      // el caso de un envío que falló en silencio y nunca va a confirmarse.
+      const ahora = Date.now();
       setChats(prev => {
         const map = new Map(prev.map(c => [c.id, c]));
         res.chats.forEach((c: Chat) => {
           const anterior = map.get(c.id);
           if (!anterior) { map.set(c.id, c); return; }
-          const idsServidor = new Set((c.messages || []).map(m => m.id));
-          const optimistas = (anterior.messages || []).filter(m => !idsServidor.has(m.id) && m.id.startsWith('m'));
+          const optimistas = (anterior.messages || []).filter(m => {
+            if (!m.id.startsWith('m')) return false;
+            if (ahora - Number(m.id.slice(1)) >= OPTIMISTIC_TTL_MS) return false;
+            const yaConfirmado = (c.messages || []).some(sm => sm.sender === 'agent' && sm.text === m.text);
+            return !yaConfirmado;
+          });
           map.set(c.id, { ...anterior, ...c, messages: [...(c.messages || []), ...optimistas] });
         });
         return Array.from(map.values());
@@ -83,7 +100,19 @@ export default function SoportePage() {
   };
 
   useEffect(() => { loadChats(); }, []);
+  // Polling cada 15s: red de seguridad si el navegador no puede sostener el
+  // stream de abajo (proxy corporativo, etc). Con el stream andando, en la
+  // práctica casi nunca es este timer el que termina disparando el refresh.
   useEffect(() => { const t = setInterval(() => loadChats(true), 15000); return () => clearInterval(t); }, []);
+  // Server-Sent Events: refresca al toque apenas llega un mensaje nuevo, en
+  // vez de esperar hasta 15s. Si la conexión se corta, el navegador reintenta
+  // solo (comportamiento nativo de EventSource) y mientras tanto el polling
+  // de arriba sigue cubriendo.
+  useEffect(() => {
+    const es = new EventSource("/hypercrm/api/whatsapp-events");
+    es.addEventListener("nuevo-mensaje", () => loadChats(true));
+    return () => es.close();
+  }, []);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [activeChatId, chats]);
 
   const activeChat = chats.find(c => c.id === activeChatId);
@@ -220,6 +249,14 @@ export default function SoportePage() {
                 </div>
               </div>
               <div className="flex gap-1.5">
+                <button
+                  onClick={() => marcar(formatearDestinoWhatsAppAR(activeChat.phone))}
+                  disabled={estadoSoftphone !== "registrado"}
+                  className="p-1.5 bg-black border border-gray-800 text-gray-500 hover:text-green-400 hover:border-green-400 disabled:opacity-30 disabled:hover:text-gray-500 disabled:hover:border-gray-800 disabled:cursor-not-allowed transition-colors"
+                  title={estadoSoftphone === "registrado" ? "Llamar por WhatsApp" : "Softphone no disponible"}
+                >
+                  <PhoneCall className="w-4 h-4" />
+                </button>
                 <button className="p-1.5 bg-black border border-gray-800 text-gray-500 hover:text-cyan-400 hover:border-cyan-400 transition-colors" title="Asignar agente"><User className="w-4 h-4" /></button>
                 <button className="p-1.5 bg-black border border-gray-800 text-gray-500 hover:text-purple-400 hover:border-purple-400 transition-colors" title="Configuración Bot"><Settings className="w-4 h-4" /></button>
                 <button className="px-2 py-1 bg-black border border-red-900/50 text-red-500 hover:bg-red-900/30 transition-colors text-[9px] font-mono tracking-widest">CERRAR</button>

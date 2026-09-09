@@ -1,3 +1,6 @@
+import { SoftphoneProvider } from "@/context/SoftphoneContext";
+import SoftphoneWidget from "@/components/SoftphoneWidget";
+
 // Fuerza render dinámico para todo el árbol /hypercrm (multi-tenant vía
 // cookie de nodo, datos siempre en vivo). Se escapa acá y no en el layout
 // raíz para no romper el pre-render estático de los especiales de Next.js
@@ -10,5 +13,14 @@ export default function HypercrmLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return children;
+  // Único lugar que realmente envuelve TODO /hypercrm/* -- a diferencia de
+  // MainLayout, que solo usa la sección /hypercrm/dashboard. El softphone
+  // tiene que vivir acá para que useSoftphone() funcione en cualquier
+  // pantalla (soporte, etc.), no solo en las que pasan por MainLayout.
+  return (
+    <SoftphoneProvider>
+      {children}
+      <SoftphoneWidget />
+    </SoftphoneProvider>
+  );
 }

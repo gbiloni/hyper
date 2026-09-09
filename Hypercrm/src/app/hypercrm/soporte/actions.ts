@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { formatearDestinoWhatsAppAR } from "@/lib/whatsappPhone";
 
 // Todas las acciones de esta pantalla operan sobre el nodo activo del
 // operador (cookie que setea el login de Hypercrm, no confundir con las
@@ -118,6 +119,45 @@ export async function getChatsOmnicanal() {
   }
 }
 
+// Historial de llamadas por WhatsApp (Calling API vía SIP) del nodo activo.
+// Alimentado por el webhook (field "calls") en whatsapp-webhooks/messages;
+// esta acción solo lee lo que ya quedó guardado en crm_llamadas.
+export async function getLlamadasRecientes() {
+  try {
+    const idNodo = await getIdNodoActivo();
+    const { default: pool } = await import('@/lib/db');
+
+    const [rows]: any = await pool.query(
+      `SELECT c.id, c.wa_call_id, c.phone_number, c.direction, c.status,
+              c.start_time, c.end_time, c.duration_seconds, c.created_at,
+              conv.user_name
+       FROM crm_llamadas c
+       LEFT JOIN whatsapp_conversations conv ON conv.id = c.conversation_id
+       WHERE c.id_nodo = ?
+       ORDER BY c.created_at DESC
+       LIMIT 50`,
+      [idNodo]
+    );
+
+    return {
+      llamadas: (rows || []).map((r: any) => ({
+        id: String(r.id),
+        waCallId: r.wa_call_id,
+        phone: r.phone_number,
+        name: r.user_name || r.phone_number,
+        direction: r.direction as 'INBOUND' | 'OUTBOUND',
+        status: r.status as string | null,
+        durationSeconds: r.duration_seconds as number | null,
+        startedAt: r.start_time,
+        endedAt: r.end_time,
+      })),
+    };
+  } catch (err) {
+    console.error("Error al obtener llamadas de WhatsApp:", err);
+    return { llamadas: [] };
+  }
+}
+
 // Envío manual del operador desde la bandeja. Se resuelve acá directo (DB +
 // Meta) en vez de pegarle por HTTP a /api/whatsapp-send-message: esta acción
 // ya corre server-side en el mismo proceso, y un self-fetch dependería de
@@ -143,7 +183,7 @@ export async function enviarMensajeMeta(_chatId: string, phone: string, message:
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messaging_product: 'whatsapp', recipient_type: 'individual', to: phone,
+        messaging_product: 'whatsapp', recipient_type: 'individual', to: formatearDestinoWhatsAppAR(phone),
         type: 'text', text: { preview_url: false, body: message },
       }),
     });
