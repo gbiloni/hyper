@@ -9,8 +9,10 @@ export async function GET() {
     
     const idNodo = idNodoStr ? parseInt(idNodoStr, 10) : 1;
 
+    // OJO: nunca seleccionar `token` acá — esta respuesta va directo al
+    // navegador, y antes se mandaba el access_token disfrazado de waba_id.
     const [rows]: any = await db.query(
-      `SELECT id, identificador as phone_number_id, identificador as display_name, token as waba_id, activo
+      `SELECT id, identificador as phone_number_id, identificador as display_name, waba_id, activo
        FROM crm_cuentas
        WHERE id_nodo = ? AND canal = 'whatsapp'`,
       [idNodo]

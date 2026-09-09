@@ -39,12 +39,14 @@ export async function POST(req: Request) {
     
     const displayName = phoneData.display_phone_number || phone_number_id;
 
-    // Guardar en crm_cuentas localmente
+    // Guardar en crm_cuentas localmente (incluye el waba_id que ya trae el
+    // flujo de Embedded Signup, para poder sincronizar automáticamente
+    // después sin pedirle a nadie que lo vuelva a pegar a mano).
     await db.query(
-      `INSERT INTO crm_cuentas (id_nodo, canal, identificador, token, activo)
-       VALUES (?, 'whatsapp', ?, ?, 1)
-       ON DUPLICATE KEY UPDATE token = ?, activo = 1`,
-      [idNodo, phone_number_id, accessToken, accessToken]
+      `INSERT INTO crm_cuentas (id_nodo, canal, identificador, waba_id, token, activo)
+       VALUES (?, 'whatsapp', ?, ?, ?, 1)
+       ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1`,
+      [idNodo, phone_number_id, waba_id || null, accessToken]
     );
 
     return NextResponse.json({ success: true, message: 'Cuenta vinculada exitosamente' });

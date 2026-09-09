@@ -239,6 +239,34 @@ export default function WhatsappSettingsPage() {
     }
   };
 
+  // Sincroniza usando el WABA ID + token que ya quedaron guardados de una
+  // cuenta conectada antes (Alta Manual o Asistente de Meta) — no requiere
+  // pegar ningún dato a mano.
+  const handleSyncAuto = async () => {
+    setError(null);
+    setSuccessMsg(null);
+    setConnecting(true);
+    try {
+      const res = await fetch("/hypercrm/api/whatsapp-config/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setSuccessMsg(data.message || "Sincronización automática completada.");
+        await loadRows();
+      } else {
+        setError(data.error || "Error en la sincronización automática.");
+      }
+    } catch (err: any) {
+      setError("Error al conectar con Meta.");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   const handleEliminar = async (id: number) => {
     if (!confirm("¿Desconectar este número?")) return;
     try {
@@ -350,9 +378,21 @@ export default function WhatsappSettingsPage() {
         {/* TAB 2: AUTOSYNC DE META */}
         {activeTab === "sync" && (
           <form onSubmit={handleSyncMeta} className="space-y-3 pt-2">
-            <p className="text-xs text-[var(--text-muted)]">
-              Ingresá tu WABA ID y tu Token de Meta para obtener e importar automáticamente todos los números registrados.
-            </p>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-xs text-[var(--text-muted)]">
+                Ingresá tu WABA ID y tu Token de Meta para obtener e importar automáticamente todos los números registrados.
+              </p>
+              <button
+                type="button"
+                onClick={handleSyncAuto}
+                disabled={connecting}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--primary)]/40 text-[var(--primary)] text-xs font-semibold hover:bg-[var(--primary)]/10 transition-colors disabled:opacity-50 whitespace-nowrap"
+                title="Usa el WABA ID y token de una cuenta ya conectada, sin pedirte nada"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${connecting ? "animate-spin" : ""}`} />
+                Sincronizar automáticamente
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input
                 type="text"
