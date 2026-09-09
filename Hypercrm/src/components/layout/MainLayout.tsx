@@ -59,11 +59,11 @@ export default function MainLayout({ children }: MainLayoutProps) {
         const res = await fetch("/hypercrm/api/auth/session");
         const data = await res.json();
         if (!data.isLoggedIn) {
-          window.location.href = "/hypercrm/login";
+          window.location.href = "/login";
           return;
         }
         if (data.user?.first_login === true) {
-          window.location.href = "/hypercrm/login";
+          window.location.href = "/login";
           return;
         }
       } catch (err) {

@@ -55,7 +55,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
       console.error(e);
     }
     // Navegación dura para enviar a la landing page y resetear estados
-    window.location.href = "/hypercrm/";
+    window.location.href = "/login";
   };
 
   const navigation = [
@@ -63,7 +63,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
     { name: "WhatsApp CRM", href: "/hypercrm/soporte", icon: MessageSquare },
     { name: "Ciudades", href: "/hypercrm/ciudades", icon: MapIcon },
     { name: "Números", href: "/hypercrm/numeros", icon: Users },
-    {
+    ...(hasRole && hasRole('ADMIN') ? [{
       name: "Configuración",
       icon: Settings,
       children: [
@@ -72,7 +72,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
         { name: "WhatsApp", href: "/hypercrm/settings/whatsapp" },
         { name: "Telegram", href: "/hypercrm/settings/telegram" },
       ]
-    },
+    }] : []),
   ];
 
 

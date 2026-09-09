@@ -19,7 +19,7 @@ export default function Home() {
 
         // Si está logueado pero necesita cambiar clave → redirigir al login
         if (data.isLoggedIn && data.user?.first_login === true) {
-          window.location.href = "/hyperisp/login";
+          window.location.href = "/login";
           return;
         }
       } catch (err) {
@@ -181,7 +181,7 @@ export default function Home() {
                 Cerrar Sesión
               </button>
             ) : (
-              <Link href="/hyperisp/login" className="btn-session btn-login">
+              <Link href="/login" className="btn-session btn-login">
                 <LogIn style={{ width: '16px', height: '16px' }} />
                 Iniciar Sesión
               </Link>

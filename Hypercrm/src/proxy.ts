@@ -13,7 +13,6 @@ const PUBLIC_PATHS = [
   "/api/check-node", // API de verificación de nodos
   "/api/webhook/telegram", // Webhook de Telegram (llamado por Telegram, sin cookie de sesión)
   "/hypercrm/api/whatsapp-webhooks/messages", // Webhook de WhatsApp multi-tenant (llamado por Meta, sin cookie de sesión)
-  "/hypercrm/login", // Login de HyperCRM
   "/hypercrm/api/system", // API de branding de HyperCRM
   "/hypercrm/api/auth", // API de auth de HyperCRM
   "/hypercrm/api/usuarios", // API de usuarios de HyperCRM
@@ -38,11 +37,7 @@ export function proxy(request: NextRequest) {
   const authCookie = request.cookies.get("hyperisp_session");
   if (!authCookie) {
     const url = request.nextUrl.clone();
-    if (pathname.startsWith("/hypercrm")) {
-      url.pathname = "/hypercrm/login";
-    } else {
-      url.pathname = "/login";
-    }
+    url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 

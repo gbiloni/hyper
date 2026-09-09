@@ -112,8 +112,8 @@ export default function HomePage() {
           sessionStorage.removeItem('clientes_tech_search');
           sessionStorage.removeItem('hyperisp_last_node_id');
         } catch(e) {}
-        // Abrir directo al login para forzar autenticación en la ciudad seleccionada
-        window.open('/hypercrm/login', '_blank');
+        // Abrir directo al dashboard de la ciudad seleccionada sin pedir login nuevamente
+        window.open('/hypercrm/dashboard', '_blank');
       } else {
         console.error(`❌ Falló la conexión a todos los endpoints del nodo.`);
         alert("No se pudo conectar a la API de " + nodo.nombre + " (ni por IP Privada ni Pública).\n\n" + 

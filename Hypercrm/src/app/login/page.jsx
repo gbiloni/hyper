@@ -33,7 +33,7 @@ export default function LoginPage() {
       if (data && data.user && data.user.first_login) {
         setRequireChangePassword(true);
       } else {
-        router.push('/');
+        router.push('/hypercrm/dashboard');
       }
     } catch (err) {
       setError(err.message || 'Error en login');
@@ -63,7 +63,7 @@ export default function LoginPage() {
       await changePassword(username, password, newPassword);
       // Tras cambiar la clave exitosamente, hacemos login de nuevo y pasamos
       await login(username, newPassword);
-      router.push('/');
+      router.push('/hypercrm/dashboard');
     } catch (err) {
       setError(err.message || 'Error al cambiar la clave');
     } finally {
