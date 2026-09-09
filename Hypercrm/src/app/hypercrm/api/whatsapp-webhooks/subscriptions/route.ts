@@ -55,7 +55,7 @@ export async function POST(req: Request) {
     // Receptor multi-tenant: valida firma HMAC, resuelve el nodo dueño de
     // cada phone_number_id vía crm_cuentas, corre el motor de bot y
     // reenvía el evento crudo al nodo correspondiente.
-    const callbackUrl = `https://crm.hyperisp.com.ar/hypercrm/api/whatsapp-webhooks/messages`;
+    const callbackUrl = `https://crm.hyperisp.com.ar/hypercrm/api/whatsapp-webhooks/messages/`;
 
     const { ok, data, status } = await graphFetch(
       `${appId}/subscriptions`,

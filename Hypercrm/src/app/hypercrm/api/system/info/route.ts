@@ -18,7 +18,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       data: {
-        nombre_empresa: "HyperISP (Fallback)",
+        nombre_empresa: "Hyper CRM",
         version: "3.0.0",
         logo_url: "/hyper.ico"
       }
