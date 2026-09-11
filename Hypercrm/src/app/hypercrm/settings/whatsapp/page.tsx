@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { Fragment, useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { MessageCircle, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle, Clock, Download, Settings, Server, FileText, Webhook, Activity } from "lucide-react";
+import { MessageCircle, Plus, Trash2, RefreshCw, CheckCircle2, AlertTriangle, Clock, Download, Settings, Server, FileText, Webhook, Activity, Phone, ChevronDown, ChevronUp } from "lucide-react";
 
 interface WhatsappConfigRow {
   id: number;
@@ -42,6 +42,34 @@ export default function WhatsappSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const signupDataRef = useRef<{ waba_id?: string; phone_number_id?: string; coexistence?: boolean }>({});
+
+  // Calling/SIP settings (solo lectura) por fila, para no tener que hacer
+  // curl a mano contra Meta Graph API cuando hay que diagnosticar el trunk.
+  const [callingOpenId, setCallingOpenId] = useState<number | null>(null);
+  const [callingLoading, setCallingLoading] = useState(false);
+  const [callingData, setCallingData] = useState<any>(null);
+  const [callingError, setCallingError] = useState<string | null>(null);
+
+  async function handleVerCalling(id: number) {
+    if (callingOpenId === id) {
+      setCallingOpenId(null);
+      return;
+    }
+    setCallingOpenId(id);
+    setCallingData(null);
+    setCallingError(null);
+    setCallingLoading(true);
+    try {
+      const res = await fetch(`/hypercrm/api/whatsapp-config/${id}/calling`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error consultando Calling settings.");
+      setCallingData(data.calling || data);
+    } catch (e: any) {
+      setCallingError(e.message);
+    } finally {
+      setCallingLoading(false);
+    }
+  }
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -484,7 +512,8 @@ export default function WhatsappSettingsPage() {
               </tr>
             )}
             {rows.map((r) => (
-              <tr key={r.id} className="border-b border-[var(--primary)]/10 hover:bg-white/[0.02]">
+              <Fragment key={r.id}>
+              <tr className="border-b border-[var(--primary)]/10 hover:bg-white/[0.02]">
                 <td className="p-3 text-[var(--text-main)]">{r.area}</td>
                 <td className="p-3 text-[var(--text-muted)] font-mono">{r.numero || r.phone_number_id || "—"}</td>
                 <td className="p-3">
@@ -512,6 +541,13 @@ export default function WhatsappSettingsPage() {
                 </td>
                 <td className="p-3 text-right">
                   <button
+                    onClick={() => handleVerCalling(r.id)}
+                    className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--primary)] hover:bg-[var(--primary)]/10 transition-colors"
+                    title="Ver estado Calling/SIP"
+                  >
+                    {callingOpenId === r.id ? <ChevronUp className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+                  </button>
+                  <button
                     onClick={() => handleEliminar(r.id)}
                     className="p-1.5 rounded-md text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
                     title="Desconectar"
@@ -520,6 +556,46 @@ export default function WhatsappSettingsPage() {
                   </button>
                 </td>
               </tr>
+              {callingOpenId === r.id && (
+                <tr className="border-b border-[var(--primary)]/10 bg-white/[0.02]">
+                  <td colSpan={6} className="p-4">
+                    {callingLoading && (
+                      <p className="text-xs text-[var(--text-muted)] flex items-center gap-1.5">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Consultando Meta...
+                      </p>
+                    )}
+                    {callingError && (
+                      <p className="text-xs text-red-400 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5" /> {callingError}
+                      </p>
+                    )}
+                    {callingData && !callingLoading && (
+                      <div className="text-xs text-[var(--text-muted)] space-y-1 font-mono">
+                        <p>
+                          calling.status:{" "}
+                          <span className={callingData.status === "ENABLED" ? "text-green-400" : "text-yellow-400"}>
+                            {callingData.status || "—"}
+                          </span>
+                        </p>
+                        <p>
+                          sip.status:{" "}
+                          <span className={callingData.sip?.status === "ENABLED" ? "text-green-400" : "text-yellow-400"}>
+                            {callingData.sip?.status || "—"}
+                          </span>
+                        </p>
+                        <p>sip.webhook_delivery: {callingData.sip?.webhook_delivery || "—"}</p>
+                        <p>
+                          sip.servers:{" "}
+                          {(callingData.sip?.servers || [])
+                            .map((s: any) => `${s.hostname}:${s.port ?? 5061}`)
+                            .join(", ") || "—"}
+                        </p>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>

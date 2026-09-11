@@ -71,6 +71,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
         { name: "Bot Automático", href: "/hypercrm/settings/bot" },
         { name: "WhatsApp", href: "/hypercrm/settings/whatsapp" },
         { name: "Telegram", href: "/hypercrm/settings/telegram" },
+        { name: "Telefonía", href: "/hypercrm/settings/telefonia" },
       ]
     }] : []),
   ];
