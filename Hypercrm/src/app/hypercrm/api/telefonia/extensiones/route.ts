@@ -10,10 +10,31 @@ const ISSABEL_SIP_DOMAIN = "sip01.hyperisp.com.ar";
 
 // Lista las extensiones del nodo activo (con el nombre del agente) y, aparte,
 // los usuarios del nodo que todavía no tienen una asignada -- así el
-// formulario de alta solo ofrece candidatos válidos.
+// formulario de alta solo ofrece candidatos válidos. Esto es admin-only: un
+// usuario común no debe ver los internos de sus compañeros. Para el caso de
+// "consultar mi interno", ver la rama esAdmin === false más abajo.
 export async function GET() {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+
+  if (!ctx.esAdmin) {
+    try {
+      const [propio]: any = await db.query(
+        `SELECT id, extension, activo, created_at
+         FROM crm_agente_extension
+         WHERE id_usuario = ? AND id_nodo = ?
+         LIMIT 1`,
+        [ctx.idUsuario, ctx.idNodo]
+      );
+      return NextResponse.json(
+        { miInterno: propio[0] || null },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    } catch (error: any) {
+      console.error("Error consultando interno propio:", error);
+      return NextResponse.json({ error: "Error interno." }, { status: 500 });
+    }
+  }
 
   try {
     const [extensiones]: any = await db.query(
@@ -51,6 +72,9 @@ export async function GET() {
 export async function POST(req: Request) {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) {
+    return NextResponse.json({ error: "Solo un administrador puede dar de alta internos." }, { status: 403 });
+  }
 
   try {
     const body = await req.json();

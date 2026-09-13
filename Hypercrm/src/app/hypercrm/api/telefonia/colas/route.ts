@@ -10,9 +10,13 @@ function parseMiembros(miembros: unknown): string[] {
   return miembros.map((m) => String(m).trim()).filter(Boolean);
 }
 
+// Gestión de colas: 100% admin-only. A diferencia de los internos, acá no
+// hay un caso de "consulta propia" -- un agente no necesita ver la
+// composición de las colas para atender su interno.
 export async function GET() {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) return NextResponse.json({ error: "No autorizado." }, { status: 403 });
 
   try {
     const [colas]: any = await db.query(
@@ -37,6 +41,9 @@ export async function GET() {
 export async function POST(req: Request) {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) {
+    return NextResponse.json({ error: "Solo un administrador puede crear colas." }, { status: 403 });
+  }
 
   try {
     const body = await req.json();

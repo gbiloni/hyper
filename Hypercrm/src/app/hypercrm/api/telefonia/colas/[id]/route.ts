@@ -16,6 +16,9 @@ function parseMiembros(miembros: unknown): string[] {
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) {
+    return NextResponse.json({ error: "Solo un administrador puede modificar colas." }, { status: 403 });
+  }
 
   try {
     const { id } = await params;
@@ -66,6 +69,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) {
+    return NextResponse.json({ error: "Solo un administrador puede eliminar colas." }, { status: 403 });
+  }
 
   try {
     const { id } = await params;

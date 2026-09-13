@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   AlertTriangle,
 } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 
 interface ExtensionRow {
   id: number;
@@ -43,6 +44,13 @@ interface ExtensionDisponible {
   agente_nombre: string;
 }
 
+interface MiInternoRow {
+  id: number;
+  extension: string;
+  activo: 0 | 1;
+  created_at: string;
+}
+
 const ESTRATEGIAS = [
   { value: "ringall", label: "Suenan todos a la vez" },
   { value: "leastrecent", label: "El que atendió hace más tiempo" },
@@ -54,10 +62,14 @@ const ESTRATEGIAS = [
 ];
 
 export default function TelefoniaSettingsPage() {
+  const { user, loading: authLoading } = useAuth() as any;
+  const esAdmin = !!user?.es_admin;
+
   const [extensiones, setExtensiones] = useState<ExtensionRow[]>([]);
   const [agentesDisponibles, setAgentesDisponibles] = useState<AgenteDisponible[]>([]);
   const [colas, setColas] = useState<ColaRow[]>([]);
   const [extensionesDisponibles, setExtensionesDisponibles] = useState<ExtensionDisponible[]>([]);
+  const [miInterno, setMiInterno] = useState<MiInternoRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,33 +85,42 @@ export default function TelefoniaSettingsPage() {
   const [nuevaColaTimeout, setNuevaColaTimeout] = useState("20");
   const [nuevaColaMiembros, setNuevaColaMiembros] = useState<string[]>([]);
 
+  // El GET de /extensiones ya devuelve un cuerpo distinto según el rol (todo
+  // el listado para admin, o solo { miInterno } para el resto) -- acá nada
+  // más hay que leer la forma que corresponda. Las colas son admin-only, así
+  // que un usuario común ni las pide (el endpoint le devolvería 403).
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [rExt, rCol] = await Promise.all([
-        fetch("/hypercrm/api/telefonia/extensiones"),
-        fetch("/hypercrm/api/telefonia/colas"),
-      ]);
+      const rExt = await fetch("/hypercrm/api/telefonia/extensiones");
       if (rExt.ok) {
         const d = await rExt.json();
-        setExtensiones(d.extensiones || []);
-        setAgentesDisponibles(d.agentesDisponibles || []);
+        if (esAdmin) {
+          setExtensiones(d.extensiones || []);
+          setAgentesDisponibles(d.agentesDisponibles || []);
+        } else {
+          setMiInterno(d.miInterno || null);
+        }
       }
-      if (rCol.ok) {
-        const d = await rCol.json();
-        setColas(d.colas || []);
-        setExtensionesDisponibles(d.extensionesDisponibles || []);
+      if (esAdmin) {
+        const rCol = await fetch("/hypercrm/api/telefonia/colas");
+        if (rCol.ok) {
+          const d = await rCol.json();
+          setColas(d.colas || []);
+          setExtensionesDisponibles(d.extensionesDisponibles || []);
+        }
       }
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [esAdmin]);
 
   useEffect(() => {
+    if (authLoading) return; // esperar a saber el rol antes de pedir datos
     loadData();
-  }, [loadData]);
+  }, [authLoading, loadData]);
 
   function notify(err: string | null, ok: string | null) {
     setError(err);
@@ -238,6 +259,64 @@ export default function TelefoniaSettingsPage() {
     "bg-background border border-[var(--primary)]/30 rounded-lg px-3 py-2 text-sm text-[var(--text-main)] focus:outline-none focus:border-[var(--primary)]";
   const btnClass =
     "inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)]/20 border border-[var(--primary)] text-[var(--primary)] font-semibold text-sm hover:bg-[var(--primary)]/30 transition-colors disabled:opacity-50";
+
+  // Altas, bajas y modificaciones de internos/colas son admin-only (impuesto
+  // también del lado del servidor). Un usuario común solo puede consultar si
+  // tiene un interno asignado -- sin ver los de sus compañeros ni las colas.
+  if (authLoading) {
+    return (
+      <div className="flex-1 p-6">
+        <p className="text-sm text-[var(--text-muted)]">Cargando...</p>
+      </div>
+    );
+  }
+
+  if (!esAdmin) {
+    return (
+      <div className="flex-1 p-6 space-y-6">
+        <div>
+          <h1 className="text-xl font-bold text-[var(--text-main)] tracking-wide flex items-center gap-2">
+            <Phone className="w-5 h-5 text-[var(--primary)]" />
+            Mi interno de telefonía
+          </h1>
+          <p className="text-sm text-[var(--text-muted)] mt-1">
+            Solo un administrador puede dar de alta, modificar o eliminar internos y colas.
+          </p>
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-400 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" /> {error}
+          </p>
+        )}
+
+        <div className="bg-background-panel border border-[var(--primary)]/20 rounded-2xl p-5 max-w-md">
+          {loading ? (
+            <p className="text-sm text-[var(--text-muted)]">Cargando...</p>
+          ) : miInterno ? (
+            <div className="space-y-2">
+              <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider">Tu interno</p>
+              <p className="text-2xl font-mono font-bold text-[var(--text-main)]">{miInterno.extension}</p>
+              {miInterno.activo ? (
+                <span className="inline-flex items-center gap-1 text-green-400 text-xs">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Activo
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[var(--text-muted)] text-xs">
+                  <Power className="w-3.5 h-3.5" /> Inactivo -- pedile a un administrador que lo reactive
+                </span>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-[var(--text-muted)]">
+              Todavía no tenés un interno de telefonía asignado en este nodo. Pedile a un
+              administrador que te cree uno.
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 p-6 space-y-6">

@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) {
+    return NextResponse.json({ error: "Solo un administrador puede modificar internos." }, { status: 403 });
+  }
 
   try {
     const { id } = await params;
@@ -47,6 +50,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
   const ctx = await getSessionContext();
   if (!ctx) return NextResponse.json({ error: "No hay sesión activa." }, { status: 401 });
+  if (!ctx.esAdmin) {
+    return NextResponse.json({ error: "Solo un administrador puede eliminar internos." }, { status: 403 });
+  }
 
   try {
     const { id } = await params;
