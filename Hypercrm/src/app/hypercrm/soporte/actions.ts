@@ -45,21 +45,48 @@ export async function getClienteByCelular(celular: string) {
   }
 }
 
+// Números de WhatsApp activos del nodo actual, para que el agente elija cuál
+// atender (un nodo puede tener más de una línea vinculada en crm_cuentas).
+export async function getCuentasWhatsapp() {
+  try {
+    const idNodo = await getIdNodoActivo();
+    const { default: pool } = await import('@/lib/db');
+    const [rows]: any = await pool.query(
+      `SELECT id, identificador FROM crm_cuentas
+       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1
+       ORDER BY id ASC`,
+      [idNodo]
+    );
+    return { cuentas: (rows || []).map((r: any) => ({ id: String(r.id), phoneNumberId: r.identificador })) };
+  } catch (err) {
+    console.error("Error al obtener cuentas de WhatsApp:", err);
+    return { cuentas: [] };
+  }
+}
+
 // Bandeja: lee conversaciones y mensajes reales de whatsapp_conversations /
 // whatsapp_messages (lo que efectivamente escribe el webhook de Meta), no de
 // la tabla legacy wapp_mensajes que usaba el bot de Telegram.
-export async function getChatsOmnicanal() {
+// phoneNumberId: si se pasa, filtra la bandeja al número elegido por el
+// agente (un nodo puede tener más de una línea de WhatsApp vinculada).
+export async function getChatsOmnicanal(phoneNumberId?: string) {
   try {
     const idNodo = await getIdNodoActivo();
     const { default: pool } = await import('@/lib/db');
 
+    const params: any[] = [idNodo];
+    let filtroNumero = '';
+    if (phoneNumberId) {
+      filtroNumero = 'AND phone_number_id = ?';
+      params.push(phoneNumberId);
+    }
     const [convRows]: any = await pool.query(
       `SELECT id, phone_number, user_name, escalated_to_agent, last_message_at
        FROM whatsapp_conversations
-       WHERE id_nodo = ?
+       WHERE id_nodo = ? ${filtroNumero}
        ORDER BY last_message_at DESC
        LIMIT 50`,
-      [idNodo]
+      params
     );
 
     if (!convRows || convRows.length === 0) return { chats: [] };
@@ -163,23 +190,33 @@ export async function getLlamadasRecientes() {
 // ya corre server-side en el mismo proceso, y un self-fetch dependería de
 // NEXT_PUBLIC_APP_URL, que no está configurado en .env.local (caería a
 // localhost:3001, casi seguro incorrecto en producción).
-export async function enviarMensajeMeta(_chatId: string, phone: string, message: string) {
+// phoneNumberId: número de WhatsApp elegido por el agente en la bandeja. Si
+// no se pasa (chats de antes del selector, u otro canal), cae al primer
+// número activo del nodo como antes.
+export async function enviarMensajeMeta(_chatId: string, phone: string, message: string, phoneNumberId?: string) {
   try {
     const idNodo = await getIdNodoActivo();
     const { default: pool } = await import('@/lib/db');
 
+    const params: any[] = [idNodo];
+    let filtroNumero = '';
+    if (phoneNumberId) {
+      filtroNumero = 'AND identificador = ?';
+      params.push(phoneNumberId);
+    }
     const [cuentaRows]: any = await pool.query(
       `SELECT identificador, token FROM crm_cuentas
-       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1 LIMIT 1`,
-      [idNodo]
+       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1 ${filtroNumero}
+       ORDER BY id ASC LIMIT 1`,
+      params
     );
     if (!cuentaRows || cuentaRows.length === 0) {
       return { success: false, error: 'No hay número de WhatsApp configurado para este nodo.' };
     }
-    const phoneNumberId = cuentaRows[0].identificador;
+    const phoneNumberIdEnvio = cuentaRows[0].identificador;
     const token = cuentaRows[0].token;
 
-    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberIdEnvio}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -195,8 +232,8 @@ export async function enviarMensajeMeta(_chatId: string, phone: string, message:
     const wabaMessageId: string | null = data.messages[0]?.id || null;
 
     const [convRows]: any = await pool.query(
-      `SELECT id FROM whatsapp_conversations WHERE id_nodo = ? AND phone_number = ? LIMIT 1`,
-      [idNodo, phone]
+      `SELECT id FROM whatsapp_conversations WHERE id_nodo = ? AND phone_number = ? AND phone_number_id = ? LIMIT 1`,
+      [idNodo, phone, phoneNumberIdEnvio]
     );
     const conversationId = convRows?.[0]?.id || null;
 

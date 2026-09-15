@@ -124,12 +124,16 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     }
     const { id_nodo: idNodo, token } = cuenta;
 
-    // Get or create conversation
+    // Get or create conversation. Se matchea también por phone_number_id (no
+    // solo id_nodo + phone_number) para no mezclar en una misma conversación
+    // los mensajes que un mismo cliente le manda a dos números de WhatsApp
+    // distintos del mismo nodo. Las filas viejas con phone_number_id NULL
+    // (previas a esta columna) igual matchean, y se completan al toque.
     const [conversations]: any = await db.query(
-      `SELECT id, escalated_to_agent FROM whatsapp_conversations
-       WHERE id_nodo = ? AND phone_number = ?
+      `SELECT id, escalated_to_agent, phone_number_id FROM whatsapp_conversations
+       WHERE id_nodo = ? AND phone_number = ? AND (phone_number_id = ? OR phone_number_id IS NULL)
        LIMIT 1`,
-      [idNodo, phoneNumber]
+      [idNodo, phoneNumber, phoneNumberId]
     );
 
     let conversationId: number;
@@ -137,11 +141,14 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     if (conversations.length > 0) {
       conversationId = conversations[0].id;
       escalated = !!conversations[0].escalated_to_agent;
+      if (!conversations[0].phone_number_id) {
+        await db.query(`UPDATE whatsapp_conversations SET phone_number_id = ? WHERE id = ?`, [phoneNumberId, conversationId]);
+      }
     } else {
       const [result]: any = await db.query(
-        `INSERT INTO whatsapp_conversations (id_nodo, phone_number, first_message_at)
-         VALUES (?, ?, NOW())`,
-        [idNodo, phoneNumber]
+        `INSERT INTO whatsapp_conversations (id_nodo, phone_number, phone_number_id, first_message_at)
+         VALUES (?, ?, ?, NOW())`,
+        [idNodo, phoneNumber, phoneNumberId]
       );
       conversationId = result.insertId;
     }

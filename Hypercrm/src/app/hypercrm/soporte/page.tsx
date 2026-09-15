@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { getClienteByCelular, getChatsOmnicanal, enviarMensajeMeta } from "./actions";
+import { getClienteByCelular, getChatsOmnicanal, enviarMensajeMeta, getCuentasWhatsapp } from "./actions";
 import { UserCircle, Phone, PhoneCall, MapPin, CreditCard, Activity, Search, Send, Bot, User, CheckCheck, Check, FileText, Settings, Zap, MessageSquare, MessageCircle, RefreshCw } from "lucide-react";
 import { useSoftphone } from "@/context/SoftphoneContext";
 import { formatearDestinoWhatsAppAR } from "@/lib/whatsappPhone";
@@ -49,6 +49,8 @@ function TypingIndicator() {
 
 export default function SoportePage() {
   const [chats, setChats]               = useState<Chat[]>([]);
+  const [cuentasWhatsapp, setCuentasWhatsapp] = useState<{ id: string; phoneNumberId: string }[]>([]);
+  const [numeroActivo, setNumeroActivo] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [inputText, setInputText]       = useState("");
   const [clientData, setClientData]     = useState<any>(null);
@@ -61,6 +63,11 @@ export default function SoportePage() {
   const { marcar, estado: estadoSoftphone } = useSoftphone();
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
+  // El polling y el SSE de abajo se registran una sola vez al montar, así que
+  // leen el número elegido de este ref (no del state) para no quedarse con
+  // un valor viejo capturado en el closure del primer render.
+  const numeroActivoRef = useRef<string | null>(null);
+  useEffect(() => { numeroActivoRef.current = numeroActivo; }, [numeroActivo]);
 
   // Más que el intervalo de refresco (15s): le da margen al POST hacia Meta +
   // el insert en la base para terminar antes de que se descarte el eco local.
@@ -68,7 +75,7 @@ export default function SoportePage() {
 
   const loadChats = async (silent = false) => {
     if (!silent) setRefreshing(true);
-    const res = await getChatsOmnicanal();
+    const res = await getChatsOmnicanal(numeroActivoRef.current || undefined);
     if (res?.chats) {
       // Los mensajes vienen siempre del servidor (fuente de verdad). Lo único
       // que se preserva del estado local es el eco optimista de un envío
@@ -99,7 +106,27 @@ export default function SoportePage() {
     if (!silent) setRefreshing(false);
   };
 
-  useEffect(() => { loadChats(); }, []);
+  useEffect(() => {
+    getCuentasWhatsapp().then(r => {
+      const cuentas = r?.cuentas || [];
+      setCuentasWhatsapp(cuentas);
+      if (cuentas.length > 0) setNumeroActivo(cuentas[0].phoneNumberId);
+      // Sin cuentas configuradas (o error): igual carga la bandeja sin
+      // filtro, para no dejar al agente sin ver nada por un problema de config.
+      else loadChats();
+    });
+  }, []);
+  // Al cambiar el número elegido se limpia la bandeja antes de recargar: el
+  // merge de loadChats conserva chats que no vienen en la respuesta nueva
+  // (para no perder ecos optimistas), así que si no se limpia acá quedarían
+  // pegados los chats del número anterior.
+  useEffect(() => {
+    if (!numeroActivo) return;
+    setChats([]);
+    setActiveChatId(null);
+    setClientData(null);
+    loadChats();
+  }, [numeroActivo]);
   // Polling cada 15s: red de seguridad si el navegador no puede sostener el
   // stream de abajo (proxy corporativo, etc). Con el stream andando, en la
   // práctica casi nunca es este timer el que termina disparando el refresh.
@@ -136,7 +163,7 @@ export default function SoportePage() {
     const newMsg: Msg = { id: "m" + Date.now(), sender: "agent", text: msg, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), read: false };
     setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, messages: [...(c.messages || []), newMsg], lastMessage: msg, time: newMsg.time } : c));
     setTyping(true);
-    await enviarMensajeMeta(activeChat.id, activeChat.phone, msg);
+    await enviarMensajeMeta(activeChat.id, activeChat.phone, msg, numeroActivo || undefined);
     setTimeout(() => setTyping(false), 1500);
     setSending(false);
     inputRef.current?.focus();
@@ -170,6 +197,21 @@ export default function SoportePage() {
               <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin text-cyan-400" : ""}`} />
             </button>
           </div>
+
+          {/* Selector de número de WhatsApp a atender (solo si hay más de uno) */}
+          {cuentasWhatsapp.length > 1 && (
+            <div className="mb-3">
+              <select
+                value={numeroActivo || ""}
+                onChange={e => setNumeroActivo(e.target.value)}
+                className="w-full bg-black border border-green-900 text-green-300 px-2 py-1.5 text-[10px] font-mono tracking-wider outline-none focus:border-green-400 transition-colors"
+              >
+                {cuentasWhatsapp.map(c => (
+                  <option key={c.id} value={c.phoneNumberId}>+{c.phoneNumberId}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Filtros de canal */}
           <div className="flex gap-1 mb-3 overflow-x-auto pb-1 no-scrollbar">

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
-import { LayoutDashboard, Map as MapIcon, Settings, Users, History, X, ChevronDown, ChevronRight, MessageSquare, LogOut, Ticket, Wrench, Server, Palette, Phone } from "lucide-react";
+import { LayoutDashboard, Map as MapIcon, Settings, History, X, ChevronDown, ChevronRight, MessageSquare, LogOut, Ticket, Wrench, Server, Palette, Phone } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import ThemeSettingsModal from "../ThemeSettingsModal";
 
@@ -62,7 +62,6 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
     { name: "Dashboard", href: "/hypercrm/dashboard", icon: LayoutDashboard },
     { name: "WhatsApp CRM", href: "/hypercrm/soporte", icon: MessageSquare, newTab: true },
     { name: "Ciudades", href: "/hypercrm/ciudades", icon: MapIcon },
-    { name: "Números", href: "/hypercrm/numeros", icon: Users },
     // Visible para todos los usuarios logueados (no solo admin): un agente
     // sin rol admin entra acá para consultar su propio interno. El CRUD de
     // internos/colas dentro de la página sigue siendo admin-only.
@@ -71,6 +70,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
       name: "Configuración",
       icon: Settings,
       children: [
+        { name: "Números de WhatsApp", href: "/hypercrm/numeros" },
         { name: "Bot Automático", href: "/hypercrm/settings/bot" },
         { name: "WhatsApp", href: "/hypercrm/settings/whatsapp" },
         { name: "Telegram", href: "/hypercrm/settings/telegram" },
