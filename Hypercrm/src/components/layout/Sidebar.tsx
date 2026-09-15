@@ -60,7 +60,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
 
   const navigation = [
     { name: "Dashboard", href: "/hypercrm/dashboard", icon: LayoutDashboard },
-    { name: "WhatsApp CRM", href: "/hypercrm/soporte", icon: MessageSquare },
+    { name: "WhatsApp CRM", href: "/hypercrm/soporte", icon: MessageSquare, newTab: true },
     { name: "Ciudades", href: "/hypercrm/ciudades", icon: MapIcon },
     { name: "Números", href: "/hypercrm/numeros", icon: Users },
     // Visible para todos los usuarios logueados (no solo admin): un agente
@@ -71,7 +71,6 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
       name: "Configuración",
       icon: Settings,
       children: [
-        { name: "General", href: "/hypercrm/settings" },
         { name: "Bot Automático", href: "/hypercrm/settings/bot" },
         { name: "WhatsApp", href: "/hypercrm/settings/whatsapp" },
         { name: "Telegram", href: "/hypercrm/settings/telegram" },
@@ -177,6 +176,7 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
                 key={item.name}
                 href={item.href}
                 onClick={() => setIsOpen(false)}
+                {...((item as any).newTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
                 className={`group flex justify-between items-center rounded-xl px-3 py-2 text-sm font-medium backdrop-blur-md transition-all duration-300 ${isActive
                   ? "lg-active bg-[var(--primary)]/[0.18] text-[var(--text-main)] border border-[var(--primary)]/45"
                   : "text-[var(--text-muted)] border border-transparent hover:bg-white/[0.06] hover:text-[var(--text-main)] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]"
