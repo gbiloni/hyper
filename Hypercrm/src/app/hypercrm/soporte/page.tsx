@@ -19,7 +19,7 @@ function Instagram({ className }: { className?: string }) {
 }
 
 type Msg = { id: string; sender: string; text: string; time: string; read?: boolean };
-type Chat = { id: string; name: string; phone: string; avatar: string; channel: string; lastMessage: string; time: string; unread: number; botActive?: boolean; messages?: Msg[] };
+type Chat = { id: string; name: string; phone: string; idNodo?: number; avatar: string; channel: string; lastMessage: string; time: string; unread: number; botActive?: boolean; messages?: Msg[] };
 
 const CHANNEL_STYLES: Record<string, { badge: string; text: string; icon: React.ReactNode }> = {
   whatsapp: { badge: "text-green-400 bg-green-950/80 border-green-500/50", text: "WhatsApp", icon: <MessageCircle className="w-3 h-3" /> },
@@ -148,7 +148,7 @@ export default function SoportePage() {
     if (activeChat?.phone) {
       setLoadingClient(true);
       setClientData(null);
-      getClienteByCelular(activeChat.phone).then(r => {
+      getClienteByCelular(activeChat.phone, activeChat.idNodo).then(r => {
         if (!r.error && r.data) { const d = r.data.cliente || r.data; if (d.id) setClientData(r.data); }
         setLoadingClient(false);
       });

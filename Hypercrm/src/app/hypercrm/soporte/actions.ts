@@ -14,9 +14,13 @@ async function getIdNodoActivo(): Promise<number> {
 // Ficha CRM del cliente: se consulta directo al backend Java (API3) del nodo
 // dueño de la conversación, igual que hace el bot (nodo.endpoint + nodo.token
 // como Bearer). No depende de cookies de sesión de Hyperisp.
-export async function getClienteByCelular(celular: string) {
+// idNodoConversacion: la ciudad ya resuelta de ESA conversación (columna
+// id_nodo de whatsapp_conversations) -- puede no coincidir con la ciudad
+// activa del agente cuando el número de WhatsApp atiende más de una ciudad.
+// Si no se pasa, cae a la ciudad activa del agente (comportamiento de antes).
+export async function getClienteByCelular(celular: string, idNodoConversacion?: number) {
   try {
-    const idNodo = await getIdNodoActivo();
+    const idNodo = idNodoConversacion ?? (await getIdNodoActivo());
     const { default: pool } = await import('@/lib/db');
     const [nodoRows]: any = await pool.query('SELECT endpoint, token FROM nodo WHERE id = ?', [idNodo]);
 
@@ -81,7 +85,7 @@ export async function getChatsOmnicanal(phoneNumberId?: string) {
       params.push(phoneNumberId);
     }
     const [convRows]: any = await pool.query(
-      `SELECT id, phone_number, user_name, escalated_to_agent, last_message_at
+      `SELECT id, id_nodo, phone_number, user_name, escalated_to_agent, last_message_at
        FROM whatsapp_conversations
        WHERE id_nodo = ? ${filtroNumero}
        ORDER BY last_message_at DESC
@@ -129,6 +133,7 @@ export async function getChatsOmnicanal(phoneNumberId?: string) {
         id: String(conv.id),
         name: nombreOTelefono,
         phone: conv.phone_number,
+        idNodo: conv.id_nodo,
         avatar: String(nombreOTelefono).substring(0, 2).toUpperCase(),
         channel: 'whatsapp',
         lastMessage: ultimo?.content || (ultimo ? `[Adjunto: ${ultimo.message_type}]` : ''),

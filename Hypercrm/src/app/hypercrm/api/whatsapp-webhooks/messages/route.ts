@@ -92,16 +92,122 @@ async function procesarPayloadAsincrono(body: any) {
   }
 }
 
-// Busca a qué nodo/cuenta pertenece un phone_number_id (multi-tenant real).
-async function getCuentaByPhoneNumberId(phoneNumberId: string): Promise<{ id_nodo: number; token: string } | null> {
+interface CiudadVinculada {
+  id_nodo: number;
+  nombre: string | null;
+  endpoint: string | null;
+  token: string | null; // token del backend Java del nodo (API3), no el de Meta
+}
+
+// Busca a qué cuenta pertenece un phone_number_id, y a qué ciudades (nodos)
+// está vinculada esa cuenta (multi-tenant real -- un mismo número puede
+// atender más de una ciudad, ver crm_cuentas_nodos).
+async function getCuentaByPhoneNumberId(phoneNumberId: string): Promise<{ id: number; id_nodo: number; token: string; ciudades: CiudadVinculada[] } | null> {
   if (!phoneNumberId) return null;
   const [rows]: any = await db.query(
-    `SELECT id_nodo, token FROM crm_cuentas
+    `SELECT id, id_nodo, token FROM crm_cuentas
      WHERE identificador = ? AND canal = 'whatsapp' AND activo = 1
      LIMIT 1`,
     [phoneNumberId]
   );
-  return rows && rows.length > 0 ? rows[0] : null;
+  if (!rows || rows.length === 0) return null;
+  const cuenta = rows[0];
+
+  const [ciudadesRows]: any = await db.query(
+    `SELECT n.id AS id_nodo, n.nombre, n.endpoint, n.token
+     FROM crm_cuentas_nodos cn JOIN nodo n ON n.id = cn.id_nodo
+     WHERE cn.id_cuenta = ? ORDER BY n.id ASC`,
+    [cuenta.id]
+  );
+  // Cuentas creadas antes de crm_cuentas_nodos (o backfill que todavía no
+  // corrió): al menos la ciudad "principal" de compatibilidad.
+  const ciudades: CiudadVinculada[] = ciudadesRows && ciudadesRows.length > 0
+    ? ciudadesRows
+    : [{ id_nodo: cuenta.id_nodo, nombre: null, endpoint: null, token: null }];
+
+  return { id: cuenta.id, id_nodo: cuenta.id_nodo, token: cuenta.token, ciudades };
+}
+
+// Consulta el backend Java de cada ciudad vinculada a la cuenta para ver en
+// cuál existe un cliente con este celular. Se usa una sola vez, al crear la
+// conversación -- no en cada mensaje, para no pegarle a N backends por cada
+// mensaje que manda el cliente.
+type ResolucionCiudad =
+  | { tipo: 'resuelta'; id_nodo: number }
+  | { tipo: 'ambigua'; opciones: { numero: number; id_nodo: number; nombre: string }[] }
+  | { tipo: 'sin_match' };
+
+async function resolverCiudadCliente(ciudades: CiudadVinculada[], phoneNumber: string): Promise<ResolucionCiudad> {
+  const resultados = await Promise.all(ciudades.map(async (c) => {
+    if (!c.endpoint) return { ...c, encontrado: false };
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (c.token) headers['Authorization'] = `Bearer ${c.token}`;
+      const res = await fetch(
+        `${c.endpoint.replace(/\/$/, '')}/clientes?celular=${encodeURIComponent(phoneNumber)}`,
+        { headers, cache: 'no-store' }
+      );
+      return { ...c, encontrado: res.ok };
+    } catch {
+      return { ...c, encontrado: false };
+    }
+  }));
+
+  const encontrados = resultados.filter((r) => r.encontrado);
+  if (encontrados.length === 1) return { tipo: 'resuelta', id_nodo: encontrados[0].id_nodo };
+  if (encontrados.length > 1) {
+    return {
+      tipo: 'ambigua',
+      opciones: encontrados.map((c, i) => ({ numero: i + 1, id_nodo: c.id_nodo, nombre: c.nombre || `Ciudad ${c.id_nodo}` })),
+    };
+  }
+  return { tipo: 'sin_match' };
+}
+
+function textoListaCiudades(opciones: { numero: number; nombre: string }[]): string {
+  return opciones.map((o) => `${o.numero}. ${o.nombre}`).join('\n');
+}
+
+// La conversación está esperando que el cliente responda cuál ciudad quiere
+// consultar (flow_state.tipo === 'seleccion_ciudad'). Este mensaje entrante
+// es, se supone, esa respuesta.
+async function manejarSeleccionCiudad(
+  opciones: { numero: number; id_nodo: number; nombre: string }[],
+  messageContent: string,
+  conversationId: number,
+  idNodoActual: number,
+  phoneNumber: string,
+  phoneNumberId: string,
+  metaToken: string
+) {
+  const numero = parseInt((messageContent || '').trim(), 10);
+  const elegido = opciones.find((o) => o.numero === numero);
+
+  if (elegido) {
+    await db.query(`UPDATE whatsapp_conversations SET id_nodo = ?, flow_state = NULL WHERE id = ?`, [elegido.id_nodo, conversationId]);
+    const texto = `Listo, quedaste en *${elegido.nombre}*. ¿En qué te puedo ayudar?`;
+    const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, metaToken);
+    if (enviado) {
+      await db.query(
+        `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
+         VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
+        [elegido.id_nodo, conversationId, phoneNumber, texto]
+      );
+    }
+    return;
+  }
+
+  // No matcheó ninguna opción: se reenvía la lista, la conversación sigue
+  // pendiente (flow_state no se toca).
+  const texto = `No entendí tu respuesta. Respondé con el número de la ciudad sobre la que querés consultar:\n${textoListaCiudades(opciones)}`;
+  const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, metaToken);
+  if (enviado) {
+    await db.query(
+      `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
+       VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
+      [idNodoActual, conversationId, phoneNumber, texto]
+    );
+  }
 }
 
 async function handleIncomingMessage(message: any, phoneNumberId: string) {
@@ -115,40 +221,64 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     else if (type === 'interactive') messageContent = message.interactive?.button_reply?.title || 'Interactive message';
     else messageContent = `[Adjunto: ${type}]`;
 
-    // Resolver el nodo dueño de este número. Sin esto, todo se guardaba
-    // (incorrectamente) bajo el nodo 1 sin importar quién lo recibió.
+    // Resolver la cuenta dueña de este número y las ciudades a las que está
+    // vinculada. Sin esto, todo se guardaba (incorrectamente) bajo el nodo 1
+    // sin importar quién lo recibió.
     const cuenta = await getCuentaByPhoneNumberId(phoneNumberId);
     if (!cuenta) {
       console.warn(`[WHATSAPP-WEBHOOK] No se encontró crm_cuentas activa para phone_number_id ${phoneNumberId}`);
       return;
     }
-    const { id_nodo: idNodo, token } = cuenta;
+    const { id_nodo: idNodoCompat, token, ciudades } = cuenta;
 
-    // Get or create conversation. Se matchea también por phone_number_id (no
-    // solo id_nodo + phone_number) para no mezclar en una misma conversación
-    // los mensajes que un mismo cliente le manda a dos números de WhatsApp
-    // distintos del mismo nodo. Las filas viejas con phone_number_id NULL
-    // (previas a esta columna) igual matchean, y se completan al toque.
+    // Get or create conversation. Se matchea por phone_number + phone_number_id
+    // (no por id_nodo: la ciudad de una conversación puede reasignarse
+    // después de una desambiguación, ver más abajo) para no mezclar en una
+    // misma conversación los mensajes que un mismo cliente le manda a dos
+    // números de WhatsApp distintos. Las filas viejas con phone_number_id
+    // NULL (previas a esta columna) igual matchean, y se completan al toque.
     const [conversations]: any = await db.query(
-      `SELECT id, escalated_to_agent, phone_number_id FROM whatsapp_conversations
-       WHERE id_nodo = ? AND phone_number = ? AND (phone_number_id = ? OR phone_number_id IS NULL)
+      `SELECT id, escalated_to_agent, phone_number_id, id_nodo, flow_state FROM whatsapp_conversations
+       WHERE phone_number = ? AND (phone_number_id = ? OR phone_number_id IS NULL)
        LIMIT 1`,
-      [idNodo, phoneNumber, phoneNumberId]
+      [phoneNumber, phoneNumberId]
     );
 
     let conversationId: number;
     let escalated = false;
+    let idNodo = idNodoCompat;
+    let flowState: any = null;
+    let esNueva = false;
+
     if (conversations.length > 0) {
       conversationId = conversations[0].id;
       escalated = !!conversations[0].escalated_to_agent;
+      idNodo = conversations[0].id_nodo;
+      flowState = conversations[0].flow_state ? JSON.parse(conversations[0].flow_state) : null;
       if (!conversations[0].phone_number_id) {
         await db.query(`UPDATE whatsapp_conversations SET phone_number_id = ? WHERE id = ?`, [phoneNumberId, conversationId]);
       }
     } else {
+      esNueva = true;
+      // Solo hace falta desambiguar si la cuenta atiende más de una ciudad.
+      // Con una sola, no hay nada que resolver -- mismo comportamiento de
+      // siempre.
+      if (ciudades.length > 1) {
+        const resolucion = await resolverCiudadCliente(ciudades, phoneNumber);
+        if (resolucion.tipo === 'resuelta') {
+          idNodo = resolucion.id_nodo;
+        } else if (resolucion.tipo === 'ambigua') {
+          flowState = { tipo: 'seleccion_ciudad', opciones: resolucion.opciones };
+          // idNodo se queda en el "principal" (idNodoCompat) mientras se
+          // pregunta -- así la conversación no queda huérfana de ciudad.
+        }
+        // 'sin_match': no hay con qué desambiguar, se sigue con idNodoCompat.
+      }
+
       const [result]: any = await db.query(
-        `INSERT INTO whatsapp_conversations (id_nodo, phone_number, phone_number_id, first_message_at)
-         VALUES (?, ?, ?, NOW())`,
-        [idNodo, phoneNumber, phoneNumberId]
+        `INSERT INTO whatsapp_conversations (id_nodo, phone_number, phone_number_id, flow_state, first_message_at)
+         VALUES (?, ?, ?, ?, NOW())`,
+        [idNodo, phoneNumber, phoneNumberId, flowState ? JSON.stringify(flowState) : null]
       );
       conversationId = result.insertId;
     }
@@ -168,6 +298,29 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     );
 
     console.log(`✅ Message saved from ${phoneNumber} in conversation ${conversationId} (nodo ${idNodo})`);
+
+    // Si un agente humano ya tomó la conversación, no lo pisa: se corta acá
+    // solo mientras sigue siendo del bot. Una vez escalada, la desambiguación
+    // de ciudad pendiente queda en manos del agente (puede reasignarla a
+    // mano si hace falta).
+    if (!escalated && flowState?.tipo === 'seleccion_ciudad') {
+      if (esNueva) {
+        // Primera vez que se detecta la ambigüedad: se manda la pregunta.
+        const texto = `Encontramos tu número en más de una ciudad. Respondé con el número de la ciudad sobre la que querés consultar:\n${textoListaCiudades(flowState.opciones)}`;
+        const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, token);
+        if (enviado) {
+          await db.query(
+            `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
+             VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
+            [idNodo, conversationId, phoneNumber, texto]
+          );
+        }
+      } else {
+        // Ya se había preguntado: este mensaje es la respuesta del cliente.
+        await manejarSeleccionCiudad(flowState.opciones, messageContent, conversationId, idNodo, phoneNumber, phoneNumberId, token);
+      }
+      return; // No se evalúa el bot mientras la ciudad no está resuelta.
+    }
 
     // Bot automático: solo si la conversación no fue escalada a un agente humano.
     // El flujo termina acá: hypercrm guarda y (si corresponde) contesta.
