@@ -45,7 +45,8 @@ hypercrm/
 │   ├── app/
 │   │   ├── api/                      # Endpoints PÚBLICOS (webhooks, send, nodos, cuentas)
 │   │   │   ├── nodos/                # CRUD de ciudades (filtrado por rol de usuario)
-│   │   │   ├── cuentas/              # CRUD crm_cuentas (canal ↔ nodo)
+│   │   │   ├── cuentas/              # CRUD crm_cuentas + crm_cuentas_nodos (canal ↔ una o más ciudades)
+│   │   │   │   └── [id]/             # PUT (editar, incluida la lista de ciudades) y DELETE
 │   │   │   ├── send/                 # Gateway Outbound centralizado
 │   │   │   └── webhook/
 │   │   │       ├── meta/             # Inbound WhatsApp, Messenger, Instagram
@@ -53,15 +54,23 @@ hypercrm/
 │   │   └── hypercrm/                 # Área autenticada
 │   │       ├── login/                # Pantalla de login del CRM
 │   │       ├── dashboard/            # Panel principal con ciudades del usuario
-│   │       ├── soporte/              # Bandeja Omnicanal de chats
+│   │       ├── soporte/              # Bandeja Omnicanal de chats (con selector de número de WhatsApp)
 │   │       ├── ciudades/             # ABM de Nodos
-│   │       ├── numeros/              # ABM de crm_cuentas
-│   │       ├── settings/             # Configuración general, WhatsApp, Telegram
-│   │       └── api/                  # Endpoints PROTEGIDOS (auth, system/info, user/theme)
+│   │       ├── numeros/              # Pantalla única de Números/Canales: ABM multi-canal y
+│   │       │                         # multi-ciudad + los 3 métodos de alta de WhatsApp (manual,
+│   │       │                         # OAuth de Meta, auto-sync) + estado Calling/SIP por número
+│   │       ├── settings/             # Configuración: Bot, Telefonía, Telegram, Theme
+│   │       │   └── whatsapp/         # Redirect a /hypercrm/numeros (unificado desde 2026-09-16)
+│   │       ├── api/                  # Endpoints PROTEGIDOS (auth, system/info, user/theme)
+│   │       │   └── whatsapp-config/  # OAuth/sync/manual de Meta + Calling/SIP (consumidos por numeros/)
+│   │       │       └── ciudades.ts   # Helper compartido: vincula una cuenta a N ciudades
+│   │       │                         # (crm_cuentas_nodos) desde los 3 flujos de alta
+│   │       └── api/whatsapp-webhooks/messages/  # Webhook inbound de WhatsApp (mensajes + calls)
 │   ├── components/
 │   │   └── layout/                   # Sidebar, Header, ThemeModal
 │   ├── context/
 │   │   ├── AuthContext.jsx           # Proveedor de sesión y rol
+│   │   ├── SoftphoneContext.tsx      # Softphone WebRTC (llamadas de WhatsApp vía SIP/Issabel)
 │   │   └── ThemeContext.tsx          # Proveedor de tema visual
 │   └── lib/
 │       ├── db.ts                     # Pool MySQL compartido
@@ -81,27 +90,46 @@ HyperCRM **nunca escribe datos de cliente** en otros sistemas. Sólo lee del `ap
 |-------|------|-------------|
 | `nodo` | Existente | Ciudades/sucursales: `id`, `nombre`, `endpoint` (URL del api3), `token`, `logo_url` |
 | `usuario` | Existente | Operadores del CRM: incluye campo `nodos` (JSON array de IDs asignados) |
-| `wapp_mensajes` | Existente | Log centralizado de **todos** los mensajes entrantes y salientes de todos los canales |
-| `crm_cuentas` | **Nueva** | Vincula canales de mensajería a nodos |
-| `crm_bot_config` | **Nueva** | Configuración del bot por nodo: preguntas, respuestas, estado activo/inactivo |
+| `crm_cuentas` | Nueva | Una cuenta de canal (número de WhatsApp, bot de Telegram, etc.) |
+| `crm_cuentas_nodos` | **Nueva (2026-09-16)** | Relación N a N: a qué ciudad(es) atiende cada cuenta |
+| `crm_bot_config` | Nueva | Configuración del bot por nodo: preguntas, respuestas, estado activo/inactivo — **implementado**, ver §6 |
+| `whatsapp_conversations` | Nueva | Una fila por conversación de WhatsApp (cliente ↔ número), con `id_nodo` resuelto y `flow_state` para flujos pendientes |
+| `whatsapp_messages` | Nueva | Mensajes de WhatsApp (INBOUND/OUTBOUND), asociados a `whatsapp_conversations` |
+| `crm_llamadas` | Nueva | Historial de llamadas por WhatsApp (Calling API vía SIP) |
+
+> [!WARNING]
+> La tabla `wapp_mensajes` mencionada en versiones previas de este documento **no es la que usa el código actual** del canal WhatsApp — es una tabla legacy que solo consume el bot de Telegram (`/api/webhook/telegram`). El log real de WhatsApp vive en `whatsapp_conversations` / `whatsapp_messages`.
 
 ### Tabla `crm_cuentas`
 
 ```sql
 CREATE TABLE IF NOT EXISTS crm_cuentas (
   id             INT AUTO_INCREMENT PRIMARY KEY,
-  id_nodo        INT NOT NULL,                        -- Ciudad a la que pertenece
+  id_nodo        INT NOT NULL,                        -- Ciudad "principal" (compatibilidad, ver nota)
   canal          VARCHAR(50) NOT NULL,                -- 'whatsapp' | 'telegram' | 'messenger' | 'instagram'
   identificador  VARCHAR(100) NOT NULL,               -- Phone Number ID (WA) o @bot_username (TG)
+  waba_id        VARCHAR(100),                        -- WhatsApp Business Account ID (solo WhatsApp)
   token          VARCHAR(255) NOT NULL,               -- Access Token o Bot Token
   activo         TINYINT(1) DEFAULT 1,
   fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_nodo (id_nodo),
+  UNIQUE KEY uq_identificador_canal (identificador, canal) -- agregada 2026-09-16
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### Tabla `crm_cuentas_nodos` (2026-09-16)
+
+```sql
+CREATE TABLE IF NOT EXISTS crm_cuentas_nodos (
+  id_cuenta INT NOT NULL,
+  id_nodo   INT NOT NULL,
+  PRIMARY KEY (id_cuenta, id_nodo),
   INDEX idx_nodo (id_nodo)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
 > [!NOTE]
-> Un mismo número de WhatsApp o bot de Telegram puede estar asociado a **múltiples ciudades** si la empresa comparte canales entre sucursales. La lógica de ruteo identifica el nodo por el número *destinatario* del mensaje entrante.
+> Un mismo número de WhatsApp (o bot de Telegram) puede atender **una o más ciudades**. La relación real vive acá; `crm_cuentas.id_nodo` queda como columna de compatibilidad (la ciudad de **menor id** entre las vinculadas) para el código que todavía no resuelve multi-ciudad. Se completa/actualiza automáticamente desde los tres flujos de alta de WhatsApp (manual, OAuth, auto-sync) y desde el CRUD de Números — ver §5bis.
 
 ### Tabla `crm_bot_config`
 
@@ -119,6 +147,15 @@ CREATE TABLE IF NOT EXISTS crm_bot_config (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
+### Tabla `whatsapp_conversations` (columnas relevantes)
+
+| Columna | Uso |
+|---------|-----|
+| `id_nodo` | Ciudad resuelta de esta conversación (ver §5bis) |
+| `phone_number` / `phone_number_id` | Celular del cliente y número de WhatsApp que recibió el mensaje |
+| `escalated_to_agent` | Si un agente humano tomó la conversación (el bot y el ruteo automático dejan de intervenir) |
+| `flow_state` | JSON libre para flujos pendientes de la conversación — hoy lo usa la desambiguación de ciudad (`{"tipo":"seleccion_ciudad","opciones":[...]}`) |
+
 ---
 
 ## 5. Flujo Bidireccional — Gateway Omnicanal
@@ -134,19 +171,30 @@ sequenceDiagram
 
     Cliente->>Meta: Envía mensaje
     Meta->>CRM: POST /hypercrm/api/whatsapp-webhooks/messages (o /api/webhook/telegram)
-    CRM->>DB: Guarda en wapp_mensajes (ENTRANTE)
-    CRM->>DB: Busca nodo en crm_cuentas por identificador
-    CRM->>DB: Evalúa reglas del bot (crm_bot_config)
+    CRM->>DB: Busca cuenta en crm_cuentas por identificador (phone_number_id)
+    CRM->>DB: Trae ciudades vinculadas (crm_cuentas_nodos)
+    alt Conversación nueva y la cuenta atiende 2+ ciudades
+        CRM->>Java: GET /clientes?celular=... a CADA ciudad vinculada (en paralelo)
+        alt Una sola ciudad tiene ese cliente
+            Java-->>CRM: Resuelve la conversación a esa ciudad
+        else Varias ciudades tienen ese cliente
+            CRM->>Meta: Pregunta por WhatsApp (lista numerada) + guarda flow_state pendiente
+            Cliente->>Meta: Responde con el número de ciudad
+            Meta->>CRM: Confirma id_nodo de la conversación, limpia flow_state
+        end
+    end
+    CRM->>DB: Guarda mensaje en whatsapp_messages (INBOUND)
+    CRM->>DB: Evalúa reglas del bot (crm_bot_config) — solo si no escalado a agente
     alt Bot activo y keyword encontrada
-        CRM->>Java: GET /api3/clientes?celular=... (enriquece respuesta)
-        Java-->>CRM: Datos del cliente (saldo, plan, estado)
+        CRM->>Java: GET /clientes?celular=... (enriquece respuesta con saldo/nombre)
+        Java-->>CRM: Datos del cliente
         CRM->>Meta: Envía respuesta automática
-        CRM->>DB: Guarda en wapp_mensajes (SALIENTE)
-    else Sin respuesta automática
-        CRM->>Agente: Notificación en bandeja (unread++)
+        CRM->>DB: Guarda en whatsapp_messages (OUTBOUND)
+    else Sin respuesta automática o conversación escalada
+        CRM->>Agente: Notificación en bandeja (unread++, ficha CRM contra la ciudad resuelta)
         Agente->>CRM: Responde desde la Bandeja Omnicanal
         CRM->>Meta: POST graph.facebook.com / api.telegram.org
-        CRM->>DB: Guarda en wapp_mensajes (SALIENTE)
+        CRM->>DB: Guarda en whatsapp_messages (OUTBOUND), marca escalated_to_agent = 1
     end
 ```
 
@@ -155,16 +203,31 @@ sequenceDiagram
 1. El cliente envía un mensaje a WhatsApp, Telegram, Messenger o Instagram.
 2. Meta/Telegram dispara el Webhook hacia `https://crm.hyperisp.com.ar/hypercrm/api/whatsapp-webhooks/messages` (o `/api/webhook/telegram`).
 3. HyperCRM valida la firma HMAC (Meta) o el token del bot (Telegram).
-4. Guarda una copia en `wapp_mensajes` como `ENTRANTE`.
-5. Identifica el nodo destino buscando el `identificador` en `crm_cuentas`.
-6. Evalúa si hay una regla de bot activa → responde automáticamente o encola para agente.
+4. Identifica la cuenta (número/bot) por `identificador` en `crm_cuentas`, y las ciudades vinculadas en `crm_cuentas_nodos`.
+5. Si es una conversación nueva y el número atiende más de una ciudad, resuelve o pregunta cuál (ver §5bis).
+6. Guarda el mensaje en `whatsapp_messages` como `INBOUND` (o en `wapp_mensajes` para el flujo legacy de Telegram).
+7. Evalúa si hay una regla de bot activa → responde automáticamente o encola para agente (solo si la conversación no está `escalated_to_agent`).
 
 ### B. Outbound — Mensajes Salientes
 
-1. El agente responde desde la **Bandeja Omnicanal** del CRM.
-2. HyperCRM llama a `/api/send` con `{ canal, cuenta_emisora, destinatario, texto }`.
-3. Busca el token en `crm_cuentas`, despacha hacia la API de Meta o Telegram.
-4. Guarda el mensaje en `wapp_mensajes` como `SALIENTE`.
+1. El agente responde desde la **Bandeja Omnicanal** del CRM (con el selector de número de WhatsApp si el nodo tiene más de una línea activa).
+2. HyperCRM despacha directo desde `soporte/actions.ts` (`enviarMensajeMeta`) — busca el token en `crm_cuentas` y llama a `graph.facebook.com`.
+3. Guarda el mensaje en `whatsapp_messages` como `OUTBOUND` y marca `escalated_to_agent = 1` en la conversación (el bot deja de contestar ahí).
+
+---
+
+## 5bis. Multi-ciudad por número (2026-09-16)
+
+> [!IMPORTANT]
+> Un mismo número de WhatsApp (o bot de Telegram) puede atender más de una ciudad. Esto afecta tres partes del sistema que antes asumían "un número = una ciudad":
+
+1. **CRUD de Números** (`/hypercrm/numeros`, pantalla única que reemplaza a la vieja `Settings > WhatsApp`): al dar de alta o editar un canal, se eligen una o más ciudades por checkbox. Los tres métodos de conexión de WhatsApp (Alta Manual, Auto-Sync leyendo Meta, Asistente OAuth) escriben en `crm_cuentas_nodos` a través del helper `whatsapp-config/ciudades.ts`. La tabla también expone el estado de Calling/SIP y permite borrar cualquier cuenta, sin restringir por la ciudad activa del admin.
+2. **Webhook de mensajes** (`whatsapp-webhooks/messages/route.ts`): cuando llega el primer mensaje de un cliente a un número multi-ciudad, consulta el backend Java (`/clientes?celular=`) de cada ciudad vinculada en paralelo.
+   - **1 coincidencia** → resuelve automático, la conversación queda con ese `id_nodo`.
+   - **2+ coincidencias** → manda una lista numerada por WhatsApp y guarda `flow_state = {"tipo":"seleccion_ciudad","opciones":[...]}`; el próximo mensaje del cliente se interpreta como su respuesta.
+   - **0 coincidencias** → sigue con la ciudad "principal" de compatibilidad (`crm_cuentas.id_nodo`, la de menor id entre las vinculadas).
+   - Si un agente humano ya escaló la conversación (`escalated_to_agent = 1`), esta lógica se desactiva por completo — no le pisa la respuesta al agente.
+3. **Ficha CRM en Soporte** (`soporte/actions.ts` → `getClienteByCelular`): consulta el backend Java de la ciudad ya resuelta de **esa conversación** (`whatsapp_conversations.id_nodo`), no la ciudad activa del agente logueado — antes podían no coincidir.
 
 ---
 
@@ -198,10 +261,10 @@ Cuando llega un mensaje nuevo, el sistema ejecuta la siguiente lógica **en orde
 ### Identificación del Cliente
 
 Cuando el bot necesita datos del cliente:
-1. Toma el número `remitente_nro` del mensaje entrante.
-2. Llama al `endpoint` del nodo correspondiente: `GET {endpoint}/clientes?celular={remitente_nro}`.
-3. **Cachea el resultado** en la tabla `wapp_mensajes` o en un campo extendido para evitar llamadas repetidas.
-4. Usa los datos para personalizar la respuesta (`Hola {nombre}, tu saldo actual es $X`).
+1. Toma el número del remitente del mensaje entrante.
+2. Llama al `endpoint` del nodo **ya resuelto de la conversación** (ver §5bis si el número atiende varias ciudades): `GET {endpoint}/clientes?celular={remitente}`.
+3. Usa los datos para personalizar la respuesta (`Hola {nombre}, tu saldo actual es $X`) — solo si la plantilla de la regla usa `{nombre}` o `{saldo}`.
+4. No hay caché: se consulta en vivo en cada respuesta del bot que necesite esos datos (el endpoint del nodo responde rápido, y cachear introduciría el riesgo de mostrar saldo desactualizado).
 
 ---
 
@@ -211,27 +274,30 @@ Cuando el bot necesita datos del cliente:
 |--------|------|--------|
 | Login del CRM | `/hypercrm/login` | ✅ Implementado |
 | Dashboard con ciudades del usuario | `/hypercrm/dashboard` | ✅ Implementado |
-| Bandeja Omnicanal (chats) | `/hypercrm/soporte` | ✅ Implementado (desde BD local) |
+| Bandeja Omnicanal (chats) | `/hypercrm/soporte` | ✅ Implementado — selector de número de WhatsApp si el nodo tiene más de una línea |
 | ABM de Ciudades (nodos) | `/hypercrm/ciudades` | ✅ Implementado |
-| ABM de Canales (crm_cuentas) | `/hypercrm/numeros` | ✅ Implementado |
+| Números / Canales (multi-canal, multi-ciudad) | `/hypercrm/numeros` | ✅ Implementado — pantalla única (absorbió `settings/whatsapp`), Alta Manual / Auto-Sync / OAuth de Meta, estado Calling/SIP |
 | Configuración Telegram | `/hypercrm/settings/telegram` | ✅ Implementado |
-| Configuración WhatsApp | `/hypercrm/settings/whatsapp` | ✅ Implementado |
-| Webhook Inbound Meta (WhatsApp multi-tenant) | `/hypercrm/api/whatsapp-webhooks/messages` | ✅ Implementado |
+| ~~Configuración WhatsApp~~ | `/hypercrm/settings/whatsapp` | ↪️ Redirect a `/hypercrm/numeros` desde 2026-09-16 |
+| Webhook Inbound Meta (WhatsApp multi-tenant + multi-ciudad) | `/hypercrm/api/whatsapp-webhooks/messages` | ✅ Implementado — ver §5bis |
 | Webhook Inbound Telegram | `/api/webhook/telegram` | ✅ Implementado |
 | Gateway Outbound (`/api/send`) | `/api/send` | ✅ Implementado |
-| **Motor de Bot / Intents** | `/hypercrm/settings/bot` | 🔴 **Pendiente** |
-| **ABM de Reglas del Bot** | `/hypercrm/settings/bot` | 🔴 **Pendiente** |
-| **API Bot Config** | `/api/bot-config` | 🔴 **Pendiente** |
-| **Integración api3 para saldo/facturas** | `soporte/actions.ts` | 🟡 Parcial |
+| Motor de Bot / Intents (`crm_bot_config`) | `/hypercrm/settings/bot` | ✅ Implementado |
+| ABM de Reglas del Bot | `/hypercrm/settings/bot` | ✅ Implementado |
+| API Bot Config | `/api/bot-config` | ✅ Implementado |
+| Llamadas por WhatsApp (Calling API vía SIP) | Softphone embebido + `crm_llamadas` | ✅ Implementado (ver `LLAMADA_POR_WHATSAPP_SIP.MD` para la referencia de la API de Meta) |
+| Integración api3 para saldo/facturas | `soporte/actions.ts` | 🟡 Parcial — saldo y nombre sí, facturas no |
 | Gestión de Usuarios del CRM | `/hypercrm/usuarios` | 🟡 Parcial |
 
 ---
 
 ## 8. Próximos Pasos de Desarrollo
 
-- [ ] **Crear tabla `crm_bot_config`** en la BD de producción.
-- [ ] **ABM de reglas del Bot** (`/hypercrm/settings/bot`): UI para que cada responsable de ciudad configure keywords/respuestas.
-- [ ] **Motor de evaluación** en el webhook Inbound: ejecutar el switch de intents antes de encolar para agente.
-- [ ] **Enriquecimiento desde api3**: cuando se identifica la intent "saldo" o "reclamo", llamar al nodo correspondiente y cachear la respuesta.
-- [ ] **Notificaciones en tiempo real**: usar SSE o WebSockets para actualizar la bandeja sin polling cada 15s.
+- [x] ~~Crear tabla `crm_bot_config`~~ — implementado.
+- [x] ~~ABM de reglas del Bot~~ — implementado (`/hypercrm/settings/bot`).
+- [x] ~~Motor de evaluación en el webhook Inbound~~ — implementado (`evaluarBot` en `whatsapp-webhooks/messages/route.ts`).
+- [x] ~~Notificaciones en tiempo real~~ — implementado vía Server-Sent Events (`/hypercrm/api/whatsapp-events`); el polling cada 15s queda como red de seguridad.
+- [ ] **Enriquecimiento desde api3 más allá de saldo/nombre**: facturas y apertura de tickets desde el bot (intents "factura"/"reclamo" de la tabla de §6 son aspiracionales, no implementadas).
 - [ ] **Gestión de Usuarios del CRM**: completar la asignación de nodos por usuario desde la UI de administración.
+- [ ] **Enrutamiento multi-ciudad más allá del primer contacto**: hoy la desambiguación de ciudad (§5bis) solo corre al crear la conversación. Si el cliente en algún momento quiere consultar otra de sus ciudades vinculadas dentro de la misma conversación, no hay manera de volver a preguntar — el agente tendría que reasignar `id_nodo` a mano.
+- [ ] **Timeout en las consultas de desambiguación**: `resolverCiudadCliente` no tiene timeout por ciudad — si el backend Java de una ciudad está caído/lento, demora la primera respuesta al cliente.
