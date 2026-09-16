@@ -1,15 +1,16 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
+import { vincularCiudades, resolverIdNodos } from '../ciudades';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { code, waba_id, phone_number_id } = body;
+    const { code, waba_id, phone_number_id, id_nodos } = body;
 
     const cookieStore = await cookies();
     const idNodoStr = cookieStore.get("hyperisp_active_node_id")?.value;
-    const idNodo = idNodoStr ? parseInt(idNodoStr, 10) : 1;
+    const nodos = resolverIdNodos(id_nodos, idNodoStr);
 
     const appId = process.env.NEXT_PUBLIC_META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
@@ -45,9 +46,10 @@ export async function POST(req: Request) {
     await db.query(
       `INSERT INTO crm_cuentas (id_nodo, canal, identificador, waba_id, token, activo)
        VALUES (?, 'whatsapp', ?, ?, ?, 1)
-       ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1`,
-      [idNodo, phone_number_id, waba_id || null, accessToken]
+       ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1, id_nodo = VALUES(id_nodo)`,
+      [Math.min(...nodos), phone_number_id, waba_id || null, accessToken]
     );
+    await vincularCiudades('whatsapp', phone_number_id, nodos);
 
     return NextResponse.json({ success: true, message: 'Cuenta vinculada exitosamente' });
 

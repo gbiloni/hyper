@@ -72,7 +72,6 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
       children: [
         { name: "Números de WhatsApp", href: "/hypercrm/numeros" },
         { name: "Bot Automático", href: "/hypercrm/settings/bot" },
-        { name: "WhatsApp", href: "/hypercrm/settings/whatsapp" },
         { name: "Telegram", href: "/hypercrm/settings/telegram" },
       ]
     }] : []),
