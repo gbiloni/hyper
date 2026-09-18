@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import db from '@/lib/db';
 import { formatearDestinoWhatsAppAR } from '@/lib/whatsappPhone';
+import { procesarEchos } from '@/lib/whatsappEchoes';
 
 const DEFAULT_VERIFY_TOKEN = 'hyperisp_meta_2026';
 
@@ -79,6 +80,21 @@ async function procesarPayloadAsincrono(body: any) {
         for (const status of value.statuses) {
           await handleMessageStatus(status);
         }
+      }
+
+      // Coexistence: mensajes que el negocio manda desde la app del celular
+      // (field "smb_message_echoes"). Se guardan como OUTBOUND en el hilo.
+      if (value.message_echoes && value.message_echoes.length > 0) {
+        await procesarEchos(value.message_echoes, phoneNumberId, {
+          db,
+          getCuenta: getCuentaByPhoneNumberId,
+        });
+      }
+
+      // Coexistence: sincronización de contactos de la app (field
+      // "smb_app_state_sync"). Todavía no se persiste, solo se deja rastro.
+      if (value.state_sync && value.state_sync.length > 0) {
+        console.log(`[WHATSAPP-WEBHOOK] smb_app_state_sync recibido (${value.state_sync.length} contacto/s) -- sin procesar todavía`);
       }
 
       // Process calling events (Calling API vía SIP: field "calls",
