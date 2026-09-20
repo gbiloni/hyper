@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import db from '@/lib/db';
 import { formatearDestinoWhatsAppAR } from '@/lib/whatsappPhone';
 import { procesarEchos } from '@/lib/whatsappEchoes';
+import { procesarContactos } from '@/lib/whatsappContactos';
 
 const DEFAULT_VERIFY_TOKEN = 'hyperisp_meta_2026';
 
@@ -91,10 +92,13 @@ async function procesarPayloadAsincrono(body: any) {
         });
       }
 
-      // Coexistence: sincronización de contactos de la app (field
-      // "smb_app_state_sync"). Todavía no se persiste, solo se deja rastro.
+      // Coexistence: agenda de la app del celular (field "smb_app_state_sync").
+      // Se guarda en whatsapp_contactos y se usa el nombre en Soporte.
       if (value.state_sync && value.state_sync.length > 0) {
-        console.log(`[WHATSAPP-WEBHOOK] smb_app_state_sync recibido (${value.state_sync.length} contacto/s) -- sin procesar todavía`);
+        await procesarContactos(value.state_sync, phoneNumberId, {
+          db,
+          getCuenta: getCuentaByPhoneNumberId,
+        });
       }
 
       // Process calling events (Calling API vía SIP: field "calls",
