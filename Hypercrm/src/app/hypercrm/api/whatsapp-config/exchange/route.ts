@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
 import { vincularCiudades, resolverIdNodos } from '../ciudades';
+import { pedirSyncContactos } from '@/lib/whatsappSyncInicial';
 
 export async function POST(req: Request) {
   try {
@@ -51,7 +52,15 @@ export async function POST(req: Request) {
     );
     await vincularCiudades('whatsapp', phone_number_id, nodos);
 
-    return NextResponse.json({ success: true, message: 'Cuenta vinculada exitosamente' });
+    // Coexistence: si el número también vive en la app del celular, se pide a
+    // Meta (una sola vez, dentro de las 24 h del alta) la agenda de contactos.
+    // Nunca rompe el alta: si falla, la cuenta queda vinculada igual.
+    const sync = await pedirSyncContactos(phone_number_id, accessToken, { db });
+    if (sync.estado !== 'solicitado') {
+      console.log(`[WHATSAPP-SYNC] Agenda no pedida para ${phone_number_id}: ${sync.estado === 'error' ? 'error — ' : ''}${sync.motivo}`);
+    }
+
+    return NextResponse.json({ success: true, message: 'Cuenta vinculada exitosamente', sync_contactos: sync.estado });
 
   } catch (error: any) {
     console.error('Error en exchange local de whatsapp:', error);
