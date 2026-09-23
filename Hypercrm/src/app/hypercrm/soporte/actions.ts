@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { GRAPH_VERSION } from "@/lib/metaGraph";
 import { formatearDestinoWhatsAppAR } from "@/lib/whatsappPhone";
 
 // Todas las acciones de esta pantalla operan sobre el nodo activo del
@@ -221,7 +222,7 @@ export async function enviarMensajeMeta(_chatId: string, phone: string, message:
     const phoneNumberIdEnvio = cuentaRows[0].identificador;
     const token = cuentaRows[0].token;
 
-    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberIdEnvio}/messages`, {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberIdEnvio}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({

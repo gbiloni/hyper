@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { GRAPH_VERSION } from "@/lib/metaGraph";
 import db from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     }
 
     const { identificador, token } = rows[0];
-    const metaUrl = `https://graph.facebook.com/v21.0/${identificador}/settings?fields=calling`;
+    const metaUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${identificador}/settings?fields=calling`;
     const resMeta = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
     const data = await resMeta.json();
 

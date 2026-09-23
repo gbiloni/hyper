@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
 import { vincularCiudades, resolverIdNodos } from '../ciudades';
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
     }
 
     // Consultar los números asociados a este WABA desde Meta Graph API
-    const metaUrl = `https://graph.facebook.com/v20.0/${waba_id}/phone_numbers?access_token=${access_token}`;
+    const metaUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${waba_id}/phone_numbers?access_token=${access_token}`;
     const resMeta = await fetch(metaUrl);
     const dataMeta = await resMeta.json();
 

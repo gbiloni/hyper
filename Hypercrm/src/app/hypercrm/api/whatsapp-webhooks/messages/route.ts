@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import crypto from 'crypto';
 import db from '@/lib/db';
 import { formatearDestinoWhatsAppAR } from '@/lib/whatsappPhone';
@@ -430,7 +431,7 @@ async function enriquecerConDatosCliente(idNodo: number, celular: string, respue
 
 async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: string, token: string): Promise<boolean> {
   try {
-    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,

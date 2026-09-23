@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
 import { vincularCiudades, resolverIdNodos } from '../ciudades';
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
     }
 
     // Intercambiar code por Access Token en Meta
-    const tokenUrl = `https://graph.facebook.com/v20.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${code}`;
+    const tokenUrl = `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${code}`;
     
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
     const accessToken = tokenData.access_token;
 
     // Obtener detalles del teléfono (display_name) desde Meta Graph
-    const phoneUrl = `https://graph.facebook.com/v20.0/${phone_number_id}?access_token=${accessToken}`;
+    const phoneUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${phone_number_id}?access_token=${accessToken}`;
     const phoneRes = await fetch(phoneUrl);
     const phoneData = await phoneRes.json();
     

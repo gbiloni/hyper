@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
 
@@ -99,7 +100,7 @@ export async function POST(req: Request) {
 
     // Send to Meta API
     const response = await fetch(
-      `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`,
       {
         method: 'POST',
         headers: {

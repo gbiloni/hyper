@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 
 export async function POST(req: Request) {
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
 async function sendWhatsAppMessage(phoneId: string, to: string, text: string, token: string): Promise<boolean> {
   try {
     // La API de WhatsApp usa el Phone Number ID en la URL, que en el CRM guardamos como "identificador" (cuenta_emisora)
-    const url = `https://graph.facebook.com/v19.0/${phoneId}/messages`;
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneId}/messages`;
     
     const payload = {
       messaging_product: "whatsapp",
