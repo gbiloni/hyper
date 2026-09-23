@@ -100,11 +100,17 @@ export async function getChatsOmnicanal(phoneNumberId?: string) {
 
     const chats = await Promise.all(convRows.map(async (conv: any) => {
       const [msgRows]: any = await pool.query(
-        `SELECT id, direction, message_type, content, status, created_at
-         FROM whatsapp_messages
-         WHERE conversation_id = ?
-         ORDER BY id ASC
-         LIMIT 200`,
+        // Los ÚLTIMOS 200 por fecha, mostrados en orden cronológico. Se ordena
+        // por created_at y no por id porque el historial de coexistencia llega
+        // después, con fechas viejas (ids altos para mensajes antiguos).
+        `SELECT * FROM (
+           SELECT id, direction, message_type, content, status, created_at
+           FROM whatsapp_messages
+           WHERE conversation_id = ?
+           ORDER BY created_at DESC, id DESC
+           LIMIT 200
+         ) ultimos
+         ORDER BY created_at ASC, id ASC`,
         [conv.id]
       );
 

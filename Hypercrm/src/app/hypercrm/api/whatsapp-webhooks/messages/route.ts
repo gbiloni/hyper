@@ -5,6 +5,7 @@ import db from '@/lib/db';
 import { formatearDestinoWhatsAppAR } from '@/lib/whatsappPhone';
 import { procesarEchos } from '@/lib/whatsappEchoes';
 import { procesarContactos } from '@/lib/whatsappContactos';
+import { procesarHistorial } from '@/lib/whatsappHistorial';
 
 const DEFAULT_VERIFY_TOKEN = 'hyperisp_meta_2026';
 
@@ -44,8 +45,10 @@ export async function POST(req: Request) {
 
     const body = JSON.parse(rawBody);
 
-    // Log webhook event
-    console.log('📨 Webhook received:', JSON.stringify(body, null, 2));
+    // Log webhook event. El historial (field "history") puede traer miles de
+    // mensajes viejos de clientes: no se vuelca entero al log.
+    const esHistorial = body.entry?.some((e: any) => e.changes?.some((c: any) => c.field === 'history'));
+    console.log('📨 Webhook received:', esHistorial ? '(history — detalle omitido por tamaño)' : JSON.stringify(body, null, 2));
 
     if (body.object !== 'whatsapp_business_account') {
       return NextResponse.json({ received: true });
@@ -97,6 +100,17 @@ async function procesarPayloadAsincrono(body: any) {
       // Se guarda en whatsapp_contactos y se usa el nombre en Soporte.
       if (value.state_sync && value.state_sync.length > 0) {
         await procesarContactos(value.state_sync, phoneNumberId, {
+          db,
+          getCuenta: getCuentaByPhoneNumberId,
+        });
+      }
+
+      // Coexistence: historial de chats de la app del celular (field
+      // "history"). Puede traer miles de mensajes; como todo este bloque, corre
+      // después de responderle 200 a Meta. Un reintento no duplica (se dedupea
+      // por id).
+      if (value.history && value.history.length > 0) {
+        await procesarHistorial(value.history, phoneNumberId, {
           db,
           getCuenta: getCuentaByPhoneNumberId,
         });
