@@ -2,6 +2,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 export const CONTACTO_EMAIL = "gbiloni@gmail.com";
+// Titular de la marca: el nombre con el que está verificado el portfolio de Meta.
+export const TITULAR = "Gabriel Biloni";
 
 const NAV = [
   { href: "/plataforma", label: "Plataforma" },
@@ -33,13 +35,16 @@ export function PublicShell({ children }: { children: ReactNode }) {
       <main className="mx-auto max-w-4xl px-5 py-10">{children}</main>
 
       <footer className="border-t border-sky-500/10 py-8 text-center text-xs text-slate-500">
+        {/* Meta exige que el nombre visible del número de WhatsApp ("Hyper
+            ISP") tenga relación evidente, en el sitio, con el titular
+            verificado del portfolio (Gabriel Biloni). No sacar esta línea. */}
         <p>
-          HyperISP — Mar del Plata, Buenos Aires, Argentina ·{" "}
+          Hyper ISP es una marca de {TITULAR} — Mar del Plata, Buenos Aires, Argentina ·{" "}
           <a href={`mailto:${CONTACTO_EMAIL}`} className="text-sky-400 hover:underline">
             {CONTACTO_EMAIL}
           </a>
         </p>
-        <p className="mt-1">© {new Date().getFullYear()} HyperISP. Todos los derechos reservados.</p>
+        <p className="mt-1">© {new Date().getFullYear()} {TITULAR} (Hyper ISP). Todos los derechos reservados.</p>
       </footer>
     </div>
   );

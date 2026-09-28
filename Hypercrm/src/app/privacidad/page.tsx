@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PublicShell, H1, H2, P, UL, CONTACTO_EMAIL } from "@/components/public/PublicShell";
+import { PublicShell, H1, H2, P, UL, CONTACTO_EMAIL, TITULAR } from "@/components/public/PublicShell";
 
 export const metadata: Metadata = {
   title: "Política de Privacidad",
@@ -16,11 +16,14 @@ export default function PrivacidadPage() {
       <P>
         Esta política describe cómo HyperISP CRM (&quot;HyperISP&quot;, &quot;nosotros&quot;) trata los datos
         cuando un proveedor de internet (&quot;el Cliente&quot;) usa la plataforma para atender a sus propios
-        clientes por WhatsApp y otros canales de mensajería. HyperISP opera Mar del Plata, Buenos Aires,
+        clientes por WhatsApp y otros canales de mensajería. HyperISP opera en Mar del Plata, Buenos Aires,
         Argentina.
       </P>
 
       <H2>1. Quién es responsable</H2>
+      <P>
+        Hyper ISP (HyperISP) es una marca de {TITULAR}, titular del servicio y responsable de esta política.
+      </P>
       <P>
         Respecto de los datos de las personas que le escriben al Cliente, el Cliente decide para qué se usan
         y HyperISP los trata en su nombre para prestarle el servicio. Para consultas sobre esta política:{" "}

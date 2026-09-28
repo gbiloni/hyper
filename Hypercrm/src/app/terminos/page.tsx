@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PublicShell, H1, H2, P, UL, CONTACTO_EMAIL } from "@/components/public/PublicShell";
+import { PublicShell, H1, H2, P, UL, CONTACTO_EMAIL, TITULAR } from "@/components/public/PublicShell";
 
 export const metadata: Metadata = {
   title: "Términos del Servicio",
@@ -18,6 +18,10 @@ export default function TerminosPage() {
         HyperISP CRM es una plataforma para que proveedores de internet atiendan a sus clientes por WhatsApp
         y otros canales de mensajería, con una bandeja compartida y un bot configurable. Al usarlo aceptás
         estos términos.
+      </P>
+      <P>
+        El servicio lo presta {TITULAR}, titular de la marca Hyper ISP (HyperISP), con domicilio en Mar del
+        Plata, Buenos Aires, Argentina.
       </P>
 
       <H2>2. Cuentas y acceso</H2>
