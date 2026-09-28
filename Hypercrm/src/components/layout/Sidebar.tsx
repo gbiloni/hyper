@@ -16,33 +16,10 @@ interface SidebarProps {
 export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: SidebarProps) {
   const pathname = usePathname();
   const { user, hasRole } = useAuth() as any;
-  const [sysName, setSysName] = useState<string>("");
-  const [sysLogo, setSysLogo] = useState<string>("");
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({
     AVL: false,
     Clientes: true
   });
-
-  useEffect(() => {
-    const fetchEmpresa = async () => {
-      try {
-        const res = await fetch("/hypercrm/api/system/info");
-        if (res.ok) {
-          const json = await res.json();
-          const nombre = json?.data?.nombre_empresa || json?.nombre_empresa;
-          const logo = json?.data?.logo_empresa || json?.logo_empresa;
-          if (nombre) {
-            setSysName(nombre.trim());
-            document.title = `${nombre.trim()} | Hyper CRM`;
-          }
-          if (logo) {
-            setSysLogo(logo);
-          }
-        }
-      } catch (e) { }
-    };
-    fetchEmpresa();
-  }, []);
 
   const toggleMenu = (name: string) => {
     setOpenMenus(prev => ({ [name]: !prev[name] }));
@@ -61,16 +38,13 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
   const navigation = [
     { name: "Dashboard", href: "/hypercrm/dashboard", icon: LayoutDashboard },
     { name: "WhatsApp CRM", href: "/hypercrm/soporte", icon: MessageSquare, newTab: true },
-    { name: "Ciudades", href: "/hypercrm/ciudades", icon: MapIcon },
-    // Visible para todos los usuarios logueados (no solo admin): un agente
-    // sin rol admin entra acá para consultar su propio interno. El CRUD de
-    // internos/colas dentro de la página sigue siendo admin-only.
-    { name: "Telefonía", href: "/hypercrm/settings/telefonia", icon: Phone },
+
     ...(hasRole && hasRole('ADMIN') ? [{
       name: "Configuración",
       icon: Settings,
       children: [
         { name: "Números de WhatsApp", href: "/hypercrm/numeros" },
+        { name: "Telefonía", href: "/hypercrm/settings/telefonia" },
         { name: "Bot Automático", href: "/hypercrm/settings/bot" },
         { name: "Telegram", href: "/hypercrm/settings/telegram" },
       ]
@@ -87,8 +61,8 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
       <div className="relative flex h-16 items-center justify-between border-b border-white/10 px-4 backdrop-blur-md">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <img
-            src={sysLogo || "/hyper.ico"}
-            alt={sysName || "Hyper ISP"}
+            src="/hyper.ico"
+            alt="Hyper ISP"
             style={{ height: '32px', width: 'auto', objectFit: 'contain', filter: 'drop-shadow(0 0 6px var(--glow-primary))' }}
           />
           <div className="flex flex-col">
@@ -97,11 +71,6 @@ export default function Sidebar({ isOpen, setIsOpen, onOpenThemeModal }: Sidebar
               {' '}
               <span style={{ color: 'var(--accent)', textShadow: '0 0 8px var(--glow-primary)' }}>CRM</span>
             </h1>
-            {sysName && (
-              <span className="text-[0.65rem] text-[var(--text-muted)] font-mono tracking-widest uppercase mt-0.5 truncate max-w-[120px]" title={sysName}>
-                {sysName}
-              </span>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
