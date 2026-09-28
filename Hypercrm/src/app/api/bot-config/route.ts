@@ -51,6 +51,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'id_nodo, pregunta y respuesta son requeridos' }, { status: 400 });
     }
 
+    if (tipo === 'interactive_button' || tipo === 'interactive_list') {
+      try {
+        JSON.parse(respuesta);
+      } catch (e) {
+        return NextResponse.json({ error: 'La respuesta debe ser un JSON válido para botones/listas interactivas' }, { status: 400 });
+      }
+    }
+
     const [result]: any = await db.query(
       'INSERT INTO crm_bot_config (id_nodo, canal, pregunta, respuesta, tipo, orden, activo) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [id_nodo, canal, pregunta, respuesta, tipo, orden, activo ? 1 : 0]

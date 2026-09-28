@@ -5,6 +5,15 @@ import db from '@/lib/db';
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   try {
     const { pregunta, respuesta, canal, tipo, orden, activo } = await req.json();
+
+    if (tipo === 'interactive_button' || tipo === 'interactive_list') {
+      try {
+        JSON.parse(respuesta);
+      } catch (e) {
+        return NextResponse.json({ error: 'La respuesta debe ser un JSON válido para botones/listas interactivas' }, { status: 400 });
+      }
+    }
+
     await db.query(
       'UPDATE crm_bot_config SET pregunta=?, respuesta=?, canal=?, tipo=?, orden=?, activo=? WHERE id=?',
       [pregunta, respuesta, canal, tipo, orden, activo ? 1 : 0, params.id]

@@ -39,6 +39,12 @@ export default function BotConfigPage() {
   const [orden, setOrden] = useState(0);
   const [saving, setSaving] = useState(false);
 
+  // Interactive Form
+  const [interactiveBodyText, setInteractiveBodyText] = useState("");
+  const [interactiveBotonLabel, setInteractiveBotonLabel] = useState("Opciones");
+  const [botones, setBotones] = useState<{ id: string; title: string }[]>([]);
+  const [filas, setFilas] = useState<{ id: string; title: string }[]>([]);
+
   useEffect(() => {
     fetch("/api/nodos")
       .then(r => r.json())
@@ -66,13 +72,31 @@ export default function BotConfigPage() {
     if (regla) {
       setEditingId(regla.id);
       setPregunta(regla.pregunta);
-      setRespuesta(regla.respuesta);
       setCanal(regla.canal);
       setTipo(regla.tipo);
       setOrden(regla.orden);
+      
+      if (regla.tipo === 'interactive_button' || regla.tipo === 'interactive_list') {
+        try {
+          const parsed = JSON.parse(regla.respuesta);
+          setRespuesta("");
+          setInteractiveBodyText(parsed.bodyText || "");
+          setInteractiveBotonLabel(parsed.botonLabel || "Opciones");
+          setBotones(parsed.botones || []);
+          setFilas(parsed.filas || []);
+        } catch(e) {
+          setRespuesta(regla.respuesta);
+        }
+      } else {
+        setRespuesta(regla.respuesta);
+        setInteractiveBodyText("");
+        setBotones([]);
+        setFilas([]);
+      }
     } else {
       setEditingId(null);
       setPregunta(""); setRespuesta(""); setCanal("all"); setTipo("keyword"); setOrden(reglas.length);
+      setInteractiveBodyText(""); setBotones([]); setFilas([]); setInteractiveBotonLabel("Opciones");
     }
     setModalOpen(true);
   };
@@ -80,12 +104,21 @@ export default function BotConfigPage() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    let finalRespuesta = respuesta;
+    if (tipo === 'interactive_button') {
+      finalRespuesta = JSON.stringify({ bodyText: interactiveBodyText, botones });
+    } else if (tipo === 'interactive_list') {
+      finalRespuesta = JSON.stringify({ bodyText: interactiveBodyText, botonLabel: interactiveBotonLabel, filas });
+    }
+    
+    const finalCanal = (tipo === 'interactive_button' || tipo === 'interactive_list') ? 'whatsapp' : canal;
+
     const url = editingId ? `/api/bot-config/${editingId}` : "/api/bot-config";
     const method = editingId ? "PUT" : "POST";
     await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_nodo: selectedNodo, pregunta, respuesta, canal, tipo, orden, activo: 1 }),
+      body: JSON.stringify({ id_nodo: selectedNodo, pregunta, respuesta: finalRespuesta, canal: finalCanal, tipo, orden, activo: 1 }),
     });
     setSaving(false);
     setModalOpen(false);
@@ -193,7 +226,12 @@ export default function BotConfigPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-purple-300">"{r.pregunta}"</td>
-                    <td className="px-4 py-3 text-xs text-[var(--text-main)] max-w-xs truncate">{r.respuesta}</td>
+                    <td className="px-4 py-3 text-xs text-[var(--text-main)] max-w-xs truncate">
+                      {r.tipo === 'interactive_button' ? <span className="text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded border border-purple-500/40 font-semibold">[Botones Interactivos]</span> :
+                       r.tipo === 'interactive_list' ? <span className="text-cyan-400 bg-cyan-900/30 px-2 py-0.5 rounded border border-cyan-500/40 font-semibold">[Lista Interactiva]</span> :
+                       r.tipo === 'escalate' ? <span className="text-orange-400 bg-orange-900/30 px-2 py-0.5 rounded border border-orange-500/40 font-semibold">[Transferir a Humano]</span> :
+                       r.respuesta}
+                    </td>
                     <td className="px-4 py-3 text-center">
                       <span className="text-[10px] border border-white/10 px-2 py-0.5 rounded font-mono text-gray-400">{r.tipo}</span>
                     </td>
@@ -227,7 +265,7 @@ export default function BotConfigPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Canal</label>
-                  <select value={canal} onChange={e => setCanal(e.target.value)} className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors">
+                  <select value={(tipo === 'interactive_button' || tipo === 'interactive_list') ? 'whatsapp' : canal} disabled={tipo === 'interactive_button' || tipo === 'interactive_list'} onChange={e => setCanal(e.target.value)} className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors disabled:opacity-50">
                     <option value="all">Todos los canales</option>
                     <option value="whatsapp">WhatsApp</option>
                     <option value="telegram">Telegram</option>
@@ -239,6 +277,9 @@ export default function BotConfigPage() {
                   <select value={tipo} onChange={e => setTipo(e.target.value)} className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors">
                     <option value="keyword">Keyword (texto exacto/parcial)</option>
                     <option value="default">Default (si ninguna otra coincide)</option>
+                    <option value="interactive_button">WhatsApp: Botones Interactivos (hasta 3)</option>
+                    <option value="interactive_list">WhatsApp: Lista Interactiva (hasta 10)</option>
+                    <option value="escalate">Transferir a Humano (Escalar)</option>
                   </select>
                 </div>
               </div>
@@ -248,11 +289,65 @@ export default function BotConfigPage() {
                 <input type="text" required value={pregunta} onChange={e => setPregunta(e.target.value)} placeholder='Ej: "saldo", "no funciona", "hola"' className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors font-mono" />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Respuesta Automática</label>
-                <textarea required value={respuesta} onChange={e => setRespuesta(e.target.value)} rows={4} placeholder="Hola {nombre}, tu saldo actual es {saldo}. Para más consultas escribí al..." className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors resize-none" />
-                <p className="text-[10px] text-gray-500">Variables disponibles: <span className="text-purple-400 font-mono">{"{nombre}"}</span>, <span className="text-purple-400 font-mono">{"{saldo}"}</span></p>
-              </div>
+              {tipo === 'interactive_button' || tipo === 'interactive_list' ? (
+                <div className="space-y-4 border border-purple-500/30 p-4 rounded-xl bg-black/30">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Texto Principal del Mensaje</label>
+                    <textarea required value={interactiveBodyText} onChange={e => setInteractiveBodyText(e.target.value)} rows={2} placeholder="Hola, ¿en qué te ayudamos?" className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors resize-none" />
+                  </div>
+                  
+                  {tipo === 'interactive_list' && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Texto del Botón que abre la Lista</label>
+                      <input type="text" required value={interactiveBotonLabel} onChange={e => setInteractiveBotonLabel(e.target.value)} placeholder="Ver opciones" className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors" />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">
+                        {tipo === 'interactive_button' ? 'Botones (Máx 3)' : 'Filas de la Lista (Máx 10)'}
+                      </label>
+                      <button type="button" onClick={() => {
+                        if (tipo === 'interactive_button' && botones.length < 3) setBotones([...botones, {id: '', title: ''}]);
+                        if (tipo === 'interactive_list' && filas.length < 10) setFilas([...filas, {id: '', title: ''}]);
+                      }} className="text-xs bg-purple-500/20 text-purple-300 hover:text-white px-2 py-1 rounded border border-purple-500/40 transition-colors">
+                        + Añadir
+                      </button>
+                    </div>
+                    {(tipo === 'interactive_button' ? botones : filas).map((item, idx) => (
+                      <div key={idx} className="flex gap-2 items-center">
+                        <input type="text" placeholder="ID Interno (ej. action_pagar)" required value={item.id} onChange={(e) => {
+                          const arr = tipo === 'interactive_button' ? [...botones] : [...filas];
+                          arr[idx].id = e.target.value;
+                          tipo === 'interactive_button' ? setBotones(arr) : setFilas(arr);
+                        }} className="flex-1 bg-black/50 border border-white/10 rounded px-2 py-1.5 text-xs text-white font-mono focus:border-purple-500 transition-colors outline-none" />
+                        <input type="text" placeholder="Texto Visible" required value={item.title} onChange={(e) => {
+                          const arr = tipo === 'interactive_button' ? [...botones] : [...filas];
+                          arr[idx].title = e.target.value;
+                          tipo === 'interactive_button' ? setBotones(arr) : setFilas(arr);
+                        }} className="flex-1 bg-black/50 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-purple-500 transition-colors outline-none" />
+                        <button type="button" onClick={() => {
+                          const arr = tipo === 'interactive_button' ? [...botones] : [...filas];
+                          arr.splice(idx, 1);
+                          tipo === 'interactive_button' ? setBotones(arr) : setFilas(arr);
+                        }} className="text-red-400 hover:text-red-300 p-1 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                    ))}
+                    {(tipo === 'interactive_button' ? botones : filas).length === 0 && (
+                      <p className="text-xs text-gray-500 italic">No hay elementos configurados.</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">
+                    {tipo === 'escalate' ? 'Mensaje de Transferencia' : 'Respuesta Automática'}
+                  </label>
+                  <textarea required={tipo !== 'interactive_button' && tipo !== 'interactive_list'} value={respuesta} onChange={e => setRespuesta(e.target.value)} rows={4} placeholder={tipo === 'escalate' ? "Te transferimos con un humano..." : "Hola {nombre}, tu saldo actual es {saldo}. Para más consultas escribí al..."} className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500 transition-colors resize-none" />
+                  {tipo !== 'escalate' && <p className="text-[10px] text-gray-500">Variables disponibles: <span className="text-purple-400 font-mono">{"{nombre}"}</span>, <span className="text-purple-400 font-mono">{"{saldo}"}</span></p>}
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-purple-300 uppercase tracking-wider">Orden de Prioridad</label>

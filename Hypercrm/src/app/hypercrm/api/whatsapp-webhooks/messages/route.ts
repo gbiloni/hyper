@@ -203,25 +203,74 @@ function textoListaCiudades(opciones: { numero: number; nombre: string }[]): str
   return opciones.map((o) => `${o.numero}. ${o.nombre}`).join('\n');
 }
 
+function recortar(texto: string, max: number): string {
+  return texto.length > max ? `${texto.slice(0, max - 1)}…` : texto;
+}
+
+// Manda el selector de ciudad como botones/lista interactivos de WhatsApp
+// (no texto libre): 3 opciones o menos van como reply buttons, hasta 10 como
+// lista -- son los límites duros que impone la Cloud API. Con más de 10 no
+// hay mensaje interactivo posible, así que se cae al texto numerado de
+// siempre. Devuelve el texto "equivalente" para loguear en whatsapp_messages
+// sin importar qué tipo de mensaje se mandó realmente.
+async function enviarSeleccionCiudad(
+  phoneNumberId: string,
+  phoneNumber: string,
+  opciones: { numero: number; id_nodo: number; nombre: string }[],
+  token: string,
+  incomingMessageId?: string,
+  prefijo: string = 'Encontramos tu número en más de una ciudad.'
+): Promise<{ enviado: boolean; contenido: string }> {
+  const cuerpo = `${prefijo} ¿Sobre cuál ciudad querés consultar?`;
+  const contenido = `${cuerpo}\n${textoListaCiudades(opciones)}`;
+
+  if (opciones.length <= 3) {
+    const botones = opciones.map((o) => ({ id: `ciudad_${o.id_nodo}`, title: recortar(o.nombre, 20) }));
+    const enviado = await sendWhatsAppInteractiveButtons(phoneNumberId, phoneNumber, cuerpo, botones, token, incomingMessageId);
+    return { enviado, contenido };
+  }
+
+  if (opciones.length <= 10) {
+    const filas = opciones.map((o) => ({ id: `ciudad_${o.id_nodo}`, title: recortar(o.nombre, 24) }));
+    const enviado = await sendWhatsAppInteractiveList(phoneNumberId, phoneNumber, cuerpo, 'Elegir ciudad', filas, token, incomingMessageId);
+    return { enviado, contenido };
+  }
+
+  // Más de 10 ciudades: único caso donde no hay mensaje interactivo posible.
+  const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, contenido, token, incomingMessageId);
+  return { enviado, contenido };
+}
+
 // La conversación está esperando que el cliente responda cuál ciudad quiere
 // consultar (flow_state.tipo === 'seleccion_ciudad'). Este mensaje entrante
 // es, se supone, esa respuesta.
 async function manejarSeleccionCiudad(
   opciones: { numero: number; id_nodo: number; nombre: string }[],
   messageContent: string,
+  interactiveReplyId: string | undefined,
   conversationId: number,
   idNodoActual: number,
   phoneNumber: string,
   phoneNumberId: string,
-  metaToken: string
+  metaToken: string,
+  incomingMessageId?: string
 ) {
-  const numero = parseInt((messageContent || '').trim(), 10);
-  const elegido = opciones.find((o) => o.numero === numero);
+  // Primero se intenta matchear por el id del botón/fila elegido
+  // (ciudad_<id_nodo>); si el cliente contestó con el número escrito a mano
+  // (compatibilidad con conversaciones que ya tenían el selector viejo en
+  // texto), se cae a esa lógica.
+  let elegido = interactiveReplyId
+    ? opciones.find((o) => `ciudad_${o.id_nodo}` === interactiveReplyId)
+    : undefined;
+  if (!elegido) {
+    const numero = parseInt((messageContent || '').trim(), 10);
+    elegido = opciones.find((o) => o.numero === numero);
+  }
 
   if (elegido) {
     await db.query(`UPDATE whatsapp_conversations SET id_nodo = ?, flow_state = NULL WHERE id = ?`, [elegido.id_nodo, conversationId]);
     const texto = `Listo, quedaste en *${elegido.nombre}*. ¿En qué te puedo ayudar?`;
-    const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, metaToken);
+    const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, metaToken, incomingMessageId);
     if (enviado) {
       await db.query(
         `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
@@ -232,15 +281,16 @@ async function manejarSeleccionCiudad(
     return;
   }
 
-  // No matcheó ninguna opción: se reenvía la lista, la conversación sigue
-  // pendiente (flow_state no se toca).
-  const texto = `No entendí tu respuesta. Respondé con el número de la ciudad sobre la que querés consultar:\n${textoListaCiudades(opciones)}`;
-  const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, metaToken);
+  // No matcheó ninguna opción: se reenvía el selector interactivo, la
+  // conversación sigue pendiente (flow_state no se toca).
+  const { enviado, contenido } = await enviarSeleccionCiudad(
+    phoneNumberId, phoneNumber, opciones, metaToken, incomingMessageId, 'No entendí tu respuesta.'
+  );
   if (enviado) {
     await db.query(
       `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
-       VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
-      [idNodoActual, conversationId, phoneNumber, texto]
+       VALUES (?, ?, ?, 'OUTBOUND', 'interactive', ?, 'SENT')`,
+      [idNodoActual, conversationId, phoneNumber, contenido]
     );
   }
 }
@@ -252,8 +302,14 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     const type = message.type; // text, interactive, etc.
 
     let messageContent = '';
+    let interactiveReplyId: string | undefined;
     if (type === 'text') messageContent = message.text?.body || '';
-    else if (type === 'interactive') messageContent = message.interactive?.button_reply?.title || 'Interactive message';
+    else if (type === 'interactive') {
+      const boton = message.interactive?.button_reply;
+      const fila = message.interactive?.list_reply;
+      interactiveReplyId = boton?.id || fila?.id;
+      messageContent = boton?.title || fila?.title || 'Interactive message';
+    }
     else messageContent = `[Adjunto: ${type}]`;
 
     // Resolver la cuenta dueña de este número y las ciudades a las que está
@@ -340,19 +396,19 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     // mano si hace falta).
     if (!escalated && flowState?.tipo === 'seleccion_ciudad') {
       if (esNueva) {
-        // Primera vez que se detecta la ambigüedad: se manda la pregunta.
-        const texto = `Encontramos tu número en más de una ciudad. Respondé con el número de la ciudad sobre la que querés consultar:\n${textoListaCiudades(flowState.opciones)}`;
-        const enviado = await sendWhatsAppTextReply(phoneNumberId, phoneNumber, texto, token);
+        // Primera vez que se detecta la ambigüedad: se manda el selector
+        // interactivo (botones o lista, según cuántas ciudades matcheen).
+        const { enviado, contenido } = await enviarSeleccionCiudad(phoneNumberId, phoneNumber, flowState.opciones, token, messageId);
         if (enviado) {
           await db.query(
             `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
-             VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
-            [idNodo, conversationId, phoneNumber, texto]
+             VALUES (?, ?, ?, 'OUTBOUND', 'interactive', ?, 'SENT')`,
+            [idNodo, conversationId, phoneNumber, contenido]
           );
         }
       } else {
         // Ya se había preguntado: este mensaje es la respuesta del cliente.
-        await manejarSeleccionCiudad(flowState.opciones, messageContent, conversationId, idNodo, phoneNumber, phoneNumberId, token);
+        await manejarSeleccionCiudad(flowState.opciones, messageContent, interactiveReplyId, conversationId, idNodo, phoneNumber, phoneNumberId, token, messageId);
       }
       return; // No se evalúa el bot mientras la ciudad no está resuelta.
     }
@@ -362,7 +418,7 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
     // No se reenvía nada a los nodos — ellos leen/escriben directo contra
     // esta misma base (hyper) según los números y permisos que tengan.
     if (!escalated) {
-      await evaluarBot(idNodo, phoneNumberId, phoneNumber, messageContent, conversationId, token);
+      await evaluarBot(idNodo, phoneNumberId, phoneNumber, messageContent, conversationId, token, messageId, interactiveReplyId, flowState);
     }
 
   } catch (error) {
@@ -373,30 +429,96 @@ async function handleIncomingMessage(message: any, phoneNumberId: string) {
 // Motor de bot: evalúa las reglas de crm_bot_config para el nodo dueño del
 // número que recibió el mensaje, y si hay una keyword activa que matchea,
 // contesta automáticamente y lo registra como mensaje OUTBOUND.
-async function evaluarBot(idNodo: number, phoneNumberId: string, remitente: string, texto: string, conversationId: number, token: string) {
-  if (!texto) return;
+async function evaluarBot(idNodo: number, phoneNumberId: string, remitente: string, texto: string, conversationId: number, token: string, incomingMessageId?: string, interactiveReplyId?: string, flowState?: any) {
+  if (!texto && !interactiveReplyId) return;
   try {
-    const [reglaRows]: any = await db.query(
-      `SELECT respuesta FROM crm_bot_config
-       WHERE id_nodo = ? AND (canal = 'whatsapp' OR canal = 'all') AND activo = 1
-         AND LOWER(?) LIKE CONCAT('%', LOWER(pregunta), '%')
-       ORDER BY orden ASC
-       LIMIT 1`,
-      [idNodo, texto]
-    );
+    let reglaRows: any = [];
+    
+    // Si hay un estado de flujo activo (y no es seleccion_ciudad), podríamos enrutarlo aquí.
+    // Por ahora, el interactiveReplyId es suficiente para mantener flujos guiados por botones.
+    
+    // Si hay un interactiveReplyId, buscamos match exacto primero (ej. el ID del botón "soporte")
+    if (interactiveReplyId) {
+      const [rows]: any = await db.query(
+        `SELECT respuesta, tipo FROM crm_bot_config
+         WHERE id_nodo = ? AND (canal = 'whatsapp' OR canal = 'all') AND activo = 1
+           AND pregunta = ?
+         ORDER BY orden ASC LIMIT 1`,
+        [idNodo, interactiveReplyId]
+      );
+      reglaRows = rows;
+    }
+    
+    // Si no hubo match por ID o no era interactivo, buscamos por LIKE en el texto
+    if (!reglaRows || reglaRows.length === 0) {
+      const [rows]: any = await db.query(
+        `SELECT respuesta, tipo FROM crm_bot_config
+         WHERE id_nodo = ? AND (canal = 'whatsapp' OR canal = 'all') AND activo = 1
+           AND LOWER(?) LIKE CONCAT('%', LOWER(pregunta), '%')
+         ORDER BY orden ASC LIMIT 1`,
+        [idNodo, texto]
+      );
+      reglaRows = rows;
+    }
+
     if (!reglaRows || reglaRows.length === 0) return; // Sin match: queda para el agente humano.
 
-    let respuesta: string = reglaRows[0].respuesta;
+    const regla = reglaRows[0];
+    const tipo = regla.tipo || 'keyword';
+    let respuesta: string = regla.respuesta;
 
-    // Si la plantilla necesita datos del cliente (nombre, saldo), se piden al
-    // backend Java (API3) del nodo dueño del número — misma convención que ya
-    // usa el bot de Telegram (nodo.endpoint + nodo.token como Bearer).
+    // Escalamiento explícito a agente humano
+    if (tipo === 'escalate') {
+      await db.query(`UPDATE whatsapp_conversations SET escalated_to_agent = 1, flow_state = NULL WHERE id = ?`, [conversationId]);
+      const msgTransfer = respuesta || "Te estamos transfiriendo con un agente humano...";
+      const enviado = await sendWhatsAppTextReply(phoneNumberId, remitente, msgTransfer, token, incomingMessageId);
+      if (enviado) {
+        await db.query(
+          `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
+           VALUES (?, ?, ?, 'OUTBOUND', 'text', ?, 'SENT')`,
+          [idNodo, conversationId, remitente, msgTransfer]
+        );
+      }
+      return;
+    }
+
+    // Interactivo vs Texto Plano
+    if (tipo === 'interactive_button' || tipo === 'interactive_list') {
+      let interactivo;
+      try {
+        interactivo = JSON.parse(respuesta);
+      } catch (e) {
+        console.error('[BOT] Error parseando JSON de respuesta interactiva:', e);
+        return;
+      }
+      
+      let enviado = false;
+      let contenidoMsg = interactivo.bodyText || 'Opciones';
+
+      if (tipo === 'interactive_button' && interactivo.botones) {
+         enviado = await sendWhatsAppInteractiveButtons(phoneNumberId, remitente, contenidoMsg, interactivo.botones, token, incomingMessageId);
+      } else if (tipo === 'interactive_list' && interactivo.filas) {
+         enviado = await sendWhatsAppInteractiveList(phoneNumberId, remitente, contenidoMsg, interactivo.botonLabel || 'Opciones', interactivo.filas, token, incomingMessageId);
+      }
+      
+      if (enviado) {
+        await db.query(
+          `INSERT INTO whatsapp_messages (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
+           VALUES (?, ?, ?, 'OUTBOUND', 'interactive', ?, 'SENT')`,
+          [idNodo, conversationId, remitente, contenidoMsg]
+        );
+        await db.query(`UPDATE whatsapp_conversations SET last_message_at = NOW() WHERE id = ?`, [conversationId]);
+      }
+      return;
+    }
+
+    // Texto Plano (tipo === 'keyword' u otro)
     if (respuesta.includes('{nombre}') || respuesta.includes('{saldo}')) {
       respuesta = await enriquecerConDatosCliente(idNodo, remitente, respuesta);
     }
 
-    const enviado = await sendWhatsAppTextReply(phoneNumberId, remitente, respuesta, token);
-    if (enviado) {
+    const enviadoText = await sendWhatsAppTextReply(phoneNumberId, remitente, respuesta, token, incomingMessageId);
+    if (enviadoText) {
       await db.query(
         `INSERT INTO whatsapp_messages
          (id_nodo, conversation_id, phone_number, direction, message_type, content, status)
@@ -443,7 +565,32 @@ async function enriquecerConDatosCliente(idNodo: number, celular: string, respue
   }
 }
 
-async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: string, token: string): Promise<boolean> {
+// Marca como leído el mensaje entrante y prende el indicador de "escribiendo...".
+// Best-effort: si Meta lo rechaza (ej. token viejo sin el permiso, o
+// mensaje_id ya expirado), se loguea y se sigue -- nunca debe bloquear la
+// respuesta real al cliente.
+async function marcarLeidoConTyping(phoneNumberId: string, incomingMessageId: string, token: string): Promise<void> {
+  try {
+    await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: incomingMessageId,
+        typing_indicator: { type: 'text' },
+      }),
+    });
+  } catch (err) {
+    console.warn('[BOT] No se pudo marcar como leído / mostrar "escribiendo...":', err);
+  }
+}
+
+async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: string, token: string, incomingMessageId?: string): Promise<boolean> {
+  if (incomingMessageId) await marcarLeidoConTyping(phoneNumberId, incomingMessageId, token);
   try {
     const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, {
       method: 'POST',
@@ -465,6 +612,91 @@ async function sendWhatsAppTextReply(phoneNumberId: string, to: string, texto: s
     return false;
   } catch (err) {
     console.error('[BOT] Excepción enviando respuesta:', err);
+    return false;
+  }
+}
+
+// Botones de respuesta rápida (máximo 3, límite duro de la Cloud API).
+async function sendWhatsAppInteractiveButtons(
+  phoneNumberId: string,
+  to: string,
+  bodyText: string,
+  botones: { id: string; title: string }[],
+  token: string,
+  incomingMessageId?: string
+): Promise<boolean> {
+  if (incomingMessageId) await marcarLeidoConTyping(phoneNumberId, incomingMessageId, token);
+  try {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formatearDestinoWhatsAppAR(to),
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: bodyText },
+          action: {
+            buttons: botones.map((b) => ({ type: 'reply', reply: { id: b.id, title: b.title } })),
+          },
+        },
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.messages) return true;
+    console.error('[BOT] Error de Meta enviando botones interactivos:', data);
+    return false;
+  } catch (err) {
+    console.error('[BOT] Excepción enviando botones interactivos:', err);
+    return false;
+  }
+}
+
+// Lista interactiva (hasta 10 filas, límite duro de la Cloud API) -- se usa
+// cuando hay más de 3 opciones y no entran como botones.
+async function sendWhatsAppInteractiveList(
+  phoneNumberId: string,
+  to: string,
+  bodyText: string,
+  botonLabel: string,
+  filas: { id: string; title: string }[],
+  token: string,
+  incomingMessageId?: string
+): Promise<boolean> {
+  if (incomingMessageId) await marcarLeidoConTyping(phoneNumberId, incomingMessageId, token);
+  try {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formatearDestinoWhatsAppAR(to),
+        type: 'interactive',
+        interactive: {
+          type: 'list',
+          body: { text: bodyText },
+          action: {
+            button: recortar(botonLabel, 20),
+            sections: [{ rows: filas.map((f) => ({ id: f.id, title: f.title })) }],
+          },
+        },
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.messages) return true;
+    console.error('[BOT] Error de Meta enviando lista interactiva:', data);
+    return false;
+  } catch (err) {
+    console.error('[BOT] Excepción enviando lista interactiva:', err);
     return false;
   }
 }
