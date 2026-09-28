@@ -1,38 +1,28 @@
 import db from '@/lib/db';
 import { NextResponse } from 'next/server';
+import { resolverIdNodo, ERROR_NODO } from '@/lib/cuentaNodo';
 
 // ==============================================================
-// PUT: Edita una cuenta / número existente, incluidas las ciudades
-// vinculadas (reemplaza el set completo en crm_cuentas_nodos).
+// PUT: Edita una cuenta / número existente, incluido el nodo al que pertenece
+// (cambiarlo "mueve" el número a otro nodo; sus conversaciones lo siguen
+// cuando llega el próximo mensaje, ver el webhook).
 // ==============================================================
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   try {
     const { id } = await params;
     const idCuenta = Number(id);
     const body = await req.json();
-    const { id_nodos, canal, identificador, token, activo } = body;
+    const { canal, identificador, token, activo } = body;
 
-    // Mismo criterio que en el POST: orden ascendente por id, no el orden
-    // de tildado, para que la "ciudad principal" (id_nodo de compatibilidad)
-    // sea determinística.
-    const nodos: number[] = (Array.isArray(id_nodos) ? id_nodos : [id_nodos].filter(Boolean)).slice().sort((a, b) => a - b);
-    if (nodos.length === 0) {
-      return NextResponse.json({ error: 'Elegí al menos una ciudad.' }, { status: 400 });
+    const idNodo = resolverIdNodo(body);
+    if (!idNodo) {
+      return NextResponse.json({ error: ERROR_NODO }, { status: 400 });
     }
 
     await db.query(
       `UPDATE crm_cuentas SET id_nodo = ?, canal = ?, identificador = ?, token = ?, activo = ?
        WHERE id = ?`,
-      [nodos[0], canal, identificador, token, activo ? 1 : 0, idCuenta]
-    );
-
-    // Reemplazo simple del set de ciudades: se borra lo anterior y se
-    // reinserta lo elegido, en vez de calcular el diff (son a lo sumo un
-    // puñado de filas por cuenta).
-    await db.query(`DELETE FROM crm_cuentas_nodos WHERE id_cuenta = ?`, [idCuenta]);
-    await db.query(
-      `INSERT INTO crm_cuentas_nodos (id_cuenta, id_nodo) VALUES ${nodos.map(() => '(?, ?)').join(', ')}`,
-      nodos.flatMap((idNodo) => [idCuenta, idNodo])
+      [idNodo, canal, identificador, token, activo ? 1 : 0, idCuenta]
     );
 
     return NextResponse.json({ success: true });
@@ -47,13 +37,12 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
 // ==============================================================
 // DELETE: Elimina una cuenta / número (cualquier canal, cualquier
-// ciudad -- la pantalla unificada administra todos los nodos por igual).
+// nodo -- la pantalla unificada administra todos los nodos por igual).
 // ==============================================================
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
   try {
     const { id } = await params;
     const idCuenta = Number(id);
-    await db.query(`DELETE FROM crm_cuentas_nodos WHERE id_cuenta = ?`, [idCuenta]);
     await db.query(`DELETE FROM crm_cuentas WHERE id = ?`, [idCuenta]);
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -2,17 +2,21 @@ import { NextResponse } from 'next/server';
 import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
-import { vincularCiudades, resolverIdNodos } from '../ciudades';
+import { resolverIdNodo, ERROR_NODO } from '@/lib/cuentaNodo';
 import { pedirSyncInicial } from '@/lib/whatsappSyncInicial';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { code, waba_id, phone_number_id, id_nodos } = body;
+    const { code, waba_id, phone_number_id } = body;
 
+    // El nodo se valida ANTES de canjear el code: el code de Meta es de un
+    // solo uso y no conviene gastarlo si el alta igual va a fallar.
     const cookieStore = await cookies();
-    const idNodoStr = cookieStore.get("hyperisp_active_node_id")?.value;
-    const nodos = resolverIdNodos(id_nodos, idNodoStr);
+    const idNodo = resolverIdNodo(body, cookieStore.get("hyperisp_active_node_id")?.value);
+    if (!idNodo) {
+      return NextResponse.json({ success: false, error: ERROR_NODO }, { status: 400 });
+    }
 
     const appId = process.env.NEXT_PUBLIC_META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
@@ -44,14 +48,14 @@ export async function POST(req: Request) {
 
     // Guardar en crm_cuentas localmente (incluye el waba_id que ya trae el
     // flujo de Embedded Signup, para poder sincronizar automáticamente
-    // después sin pedirle a nadie que lo vuelva a pegar a mano).
+    // después sin pedirle a nadie que lo vuelva a pegar a mano). Si el número
+    // ya existía, pasa al nodo elegido: es un alta explícita de ese número.
     await db.query(
       `INSERT INTO crm_cuentas (id_nodo, canal, identificador, waba_id, token, activo)
        VALUES (?, 'whatsapp', ?, ?, ?, 1)
        ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1, id_nodo = VALUES(id_nodo)`,
-      [Math.min(...nodos), phone_number_id, waba_id || null, accessToken]
+      [idNodo, phone_number_id, waba_id || null, accessToken]
     );
-    await vincularCiudades('whatsapp', phone_number_id, nodos);
 
     // Coexistence: si el número también vive en la app del celular, se pide a
     // Meta (una sola vez, dentro de las 24 h del alta) la agenda de contactos

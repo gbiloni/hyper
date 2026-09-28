@@ -2,16 +2,18 @@ import { NextResponse } from 'next/server';
 import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
-import { vincularCiudades, resolverIdNodos } from '../ciudades';
+import { resolverIdNodo, ERROR_NODO } from '@/lib/cuentaNodo';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    let { waba_id, access_token, id_nodos } = body || {};
+    let { waba_id, access_token } = body || {};
 
     const cookieStore = await cookies();
-    const idNodoStr = cookieStore.get("hyperisp_active_node_id")?.value;
-    const nodos = resolverIdNodos(id_nodos, idNodoStr);
+    const idNodo = resolverIdNodo(body, cookieStore.get("hyperisp_active_node_id")?.value);
+    if (!idNodo) {
+      return NextResponse.json({ success: false, error: ERROR_NODO }, { status: 400 });
+    }
 
     // Modo automático: si no mandaron waba_id/access_token a mano, usamos los
     // de una cuenta que ya se conectó antes (Alta Manual o Asistente de Meta),
@@ -25,7 +27,7 @@ export async function POST(req: Request) {
            AND waba_id IS NOT NULL AND waba_id <> ''
            AND token IS NOT NULL AND token <> ''
          LIMIT 1`,
-        [nodos[0]]
+        [idNodo]
       );
       if (!existing || existing.length === 0) {
         return NextResponse.json(
@@ -55,28 +57,33 @@ export async function POST(req: Request) {
     }
 
     const phoneNumbers = dataMeta.data; // Lista de números devueltos por Meta
-    let syncedCount = 0;
+    let nuevos = 0;
+    let existentes = 0;
 
     for (const phone of phoneNumbers) {
       // phone.id es el Phone Number ID
       // phone.display_phone_number es el número formateado (ej. "+54 9 11 ...")
       const phoneNumberId = phone.id;
       
-      await db.query(
+      // Un WABA puede tener números de varios nodos: el nodo elegido se le
+      // asigna solo a los números NUEVOS. Los que ya existen conservan su
+      // dueño (id_nodo no se toca); para moverlos, se edita el número.
+      const [res]: any = await db.query(
         `INSERT INTO crm_cuentas (id_nodo, canal, identificador, waba_id, token, activo)
          VALUES (?, 'whatsapp', ?, ?, ?, 1)
-         ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1, id_nodo = VALUES(id_nodo)`,
-        [Math.min(...nodos), phoneNumberId, waba_id, access_token]
+         ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1`,
+        [idNodo, phoneNumberId, waba_id, access_token]
       );
-      await vincularCiudades('whatsapp', phoneNumberId, nodos);
-      syncedCount++;
+      // mysql2: affectedRows = 1 si insertó, 2 si actualizó, 0 si no cambió nada.
+      if (res?.affectedRows === 1) nuevos++;
+      else existentes++;
     }
 
     return NextResponse.json({
       success: true,
-      message: autoMode
-        ? `Sincronización automática: ${syncedCount} número(s) actualizados desde Meta.`
-        : `Se sincronizaron ${syncedCount} números desde Meta exitosamente`,
+      message:
+        `${autoMode ? 'Sincronización automática: ' : ''}${nuevos} número(s) nuevo(s) asignado(s) a este nodo` +
+        (existentes > 0 ? `, ${existentes} ya existente(s) conservan su nodo` : '') + '.',
       data: phoneNumbers
     });
 
