@@ -25,6 +25,7 @@ const nextConfig: NextConfig = {
           '**/.codex/**',
           '**/openspec/**',
           '**/*.log',
+          '**/System Volume Information/**',
         ],
       };
     }

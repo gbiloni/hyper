@@ -59,8 +59,8 @@ If you aren't ready to create your own endpoint yet, you can [create a test webh
 
 You need the following permissions to receive webhooks:
 
-- **whatsapp_business_messaging** — for **messages** webhooks
-- **whatsapp_business_management** — for all other webhooks
+- **whatsapp_business_messaging** ï¿½ for **messages** webhooks
+- **whatsapp_business_management** ï¿½ for all other webhooks
 
 If you are a direct developer, use your system user to grant your app these permissions when generating your [system token](https://developers.facebook.com/documentation/business-messaging/whatsapp/access-tokens#system-user-access-tokens).
 
@@ -119,7 +119,7 @@ Webhooks support mutual TLS (mTLS) for added security. See Graph API's [mTLS for
 You can get the IP addresses of Meta's webhook servers by running the following command in your terminal:
 
 ```bash
-whois -h whois.radb.net — '-i origin AS32934' | grep '^route' | awk '{print $2}' | sort
+whois -h whois.radb.net ï¿½ '-i origin AS32934' | grep '^route' | awk '{print $2}' | sort
 ```
 
 You can also use the geofeed to [download a CSV](https://facebook.com/peering/geofeed) that lists Meta's IP addresses.
