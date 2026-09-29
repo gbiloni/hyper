@@ -7,12 +7,15 @@ import { resolverIdNodo, ERROR_NODO } from '@/lib/cuentaNodo';
 
 // ==============================================================
 // GET: Obtiene todas las cuentas configuradas, con el nombre del nodo al que
-// pertenece cada una.
+// pertenece cada una. El token NO se devuelve (solo si hay uno cargado): son
+// credenciales de Meta/Telegram y no tienen por qué llegar al navegador.
 // ==============================================================
 export async function GET() {
   try {
     const [rows]: any = await db.query(
-      `SELECT c.*, n.nombre AS nodo_nombre
+      `SELECT c.id, c.id_nodo, c.canal, c.identificador, c.waba_id, c.activo, c.fecha_creacion,
+              (c.token IS NOT NULL AND c.token <> '') AS tiene_token,
+              n.nombre AS nodo_nombre
        FROM crm_cuentas c
        LEFT JOIN nodo n ON n.id = c.id_nodo
        ORDER BY n.nombre ASC, c.id DESC`

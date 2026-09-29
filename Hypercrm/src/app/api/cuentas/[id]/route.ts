@@ -19,10 +19,15 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       return NextResponse.json({ error: ERROR_NODO }, { status: 400 });
     }
 
+    // El formulario no recibe el token actual (GET no lo devuelve): si viene
+    // vacío, se conserva el guardado; solo se reemplaza si escribieron uno.
+    const tokenNuevo = typeof token === 'string' ? token.trim() : '';
     await db.query(
-      `UPDATE crm_cuentas SET id_nodo = ?, canal = ?, identificador = ?, token = ?, activo = ?
+      `UPDATE crm_cuentas SET id_nodo = ?, canal = ?, identificador = ?, activo = ?${tokenNuevo ? ', token = ?' : ''}
        WHERE id = ?`,
-      [idNodo, canal, identificador, token, activo ? 1 : 0, idCuenta]
+      tokenNuevo
+        ? [idNodo, canal, identificador, activo ? 1 : 0, tokenNuevo, idCuenta]
+        : [idNodo, canal, identificador, activo ? 1 : 0, idCuenta]
     );
 
     return NextResponse.json({ success: true });

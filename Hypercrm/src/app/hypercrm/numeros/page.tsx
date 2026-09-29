@@ -15,7 +15,7 @@ interface Cuenta {
   canal: string;
   identificador: string;
   waba_id?: string | null;
-  token: string;
+  tiene_token?: number | boolean; // el token nunca viaja al navegador
   activo: number;
 }
 
@@ -126,7 +126,7 @@ export default function NumerosPage() {
       setIdNodo(cuenta.id_nodo);
       setCanal(cuenta.canal);
       setIdentificador(cuenta.identificador);
-      setToken(cuenta.token);
+      setToken(""); // vacío = conservar el token guardado
       setActivo(cuenta.activo === 1);
     } else {
       setEditingId(null);
@@ -529,8 +529,8 @@ export default function NumerosPage() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-green-300 uppercase tracking-wider">Token de Integración (API Secret)</label>
                   <input
-                    type="text" required value={token} onChange={(e) => setToken(e.target.value)}
-                    placeholder="Pegue aquí el token o secret..."
+                    type="text" required={!editingId} value={token} onChange={(e) => setToken(e.target.value)}
+                    placeholder={editingId ? "Dejar vacío para conservar el token actual" : "Pegue aquí el token o secret..."}
                     className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-green-500 transition-colors font-mono"
                   />
                 </div>
