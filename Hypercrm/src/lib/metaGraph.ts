@@ -3,7 +3,10 @@
 // necesitan el App Access Token (APP_ID|APP_SECRET): webhooks del app y
 // salud/uso de la API.
 
-export const GRAPH_VERSION = 'v20.0';
+// Versión única de la Graph API para TODO el CRM (mensajes, alta de números,
+// webhooks). Meta retira cada versión ~2 años después de publicarla (v20.0 se
+// apaga el 24/09/2026): al actualizar, cambiar solo esta línea.
+export const GRAPH_VERSION = 'v26.0';
 
 /**
  * Arma el App Access Token de Meta a partir de las credenciales del servidor.

@@ -5,6 +5,10 @@ import type { NextRequest } from "next/server";
 const PUBLIC_PATHS = [
   "/",           // Landing page
   "/login",      // Login page
+  "/plataforma", // Landing pública (la revisa Meta para la verificación de proveedor de tecnología)
+  "/privacidad", // Política de privacidad (URL declarada en la app de Meta)
+  "/terminos",   // Términos del servicio (URL declarada en la app de Meta)
+  "/eliminar-datos", // Instrucciones de eliminación de datos (URL declarada en la app de Meta)
   "/admin",      // Panel Admin de Hyperportal (auth via JWT)
   "/api/auth",   // API de autenticación
   "/api/system", // API de branding (pública)

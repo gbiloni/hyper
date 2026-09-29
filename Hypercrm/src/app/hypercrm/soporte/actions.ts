@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { GRAPH_VERSION } from "@/lib/metaGraph";
 import { formatearDestinoWhatsAppAR } from "@/lib/whatsappPhone";
 
 // Todas las acciones de esta pantalla operan sobre el nodo activo del
@@ -14,9 +15,13 @@ async function getIdNodoActivo(): Promise<number> {
 // Ficha CRM del cliente: se consulta directo al backend Java (API3) del nodo
 // dueño de la conversación, igual que hace el bot (nodo.endpoint + nodo.token
 // como Bearer). No depende de cookies de sesión de Hyperisp.
-export async function getClienteByCelular(celular: string) {
+// idNodoConversacion: la ciudad ya resuelta de ESA conversación (columna
+// id_nodo de whatsapp_conversations) -- puede no coincidir con la ciudad
+// activa del agente cuando el número de WhatsApp atiende más de una ciudad.
+// Si no se pasa, cae a la ciudad activa del agente (comportamiento de antes).
+export async function getClienteByCelular(celular: string, idNodoConversacion?: number) {
   try {
-    const idNodo = await getIdNodoActivo();
+    const idNodo = idNodoConversacion ?? (await getIdNodoActivo());
     const { default: pool } = await import('@/lib/db');
     const [nodoRows]: any = await pool.query('SELECT endpoint, token FROM nodo WHERE id = ?', [idNodo]);
 
@@ -45,21 +50,48 @@ export async function getClienteByCelular(celular: string) {
   }
 }
 
+// Números de WhatsApp activos del nodo actual, para que el agente elija cuál
+// atender (un nodo puede tener más de una línea vinculada en crm_cuentas).
+export async function getCuentasWhatsapp() {
+  try {
+    const idNodo = await getIdNodoActivo();
+    const { default: pool } = await import('@/lib/db');
+    const [rows]: any = await pool.query(
+      `SELECT id, identificador FROM crm_cuentas
+       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1
+       ORDER BY id ASC`,
+      [idNodo]
+    );
+    return { cuentas: (rows || []).map((r: any) => ({ id: String(r.id), phoneNumberId: r.identificador })) };
+  } catch (err) {
+    console.error("Error al obtener cuentas de WhatsApp:", err);
+    return { cuentas: [] };
+  }
+}
+
 // Bandeja: lee conversaciones y mensajes reales de whatsapp_conversations /
 // whatsapp_messages (lo que efectivamente escribe el webhook de Meta), no de
 // la tabla legacy wapp_mensajes que usaba el bot de Telegram.
-export async function getChatsOmnicanal() {
+// phoneNumberId: si se pasa, filtra la bandeja al número elegido por el
+// agente (un nodo puede tener más de una línea de WhatsApp vinculada).
+export async function getChatsOmnicanal(phoneNumberId?: string) {
   try {
     const idNodo = await getIdNodoActivo();
     const { default: pool } = await import('@/lib/db');
 
+    const params: any[] = [idNodo];
+    let filtroNumero = '';
+    if (phoneNumberId) {
+      filtroNumero = 'AND phone_number_id = ?';
+      params.push(phoneNumberId);
+    }
     const [convRows]: any = await pool.query(
-      `SELECT id, phone_number, user_name, escalated_to_agent, last_message_at
+      `SELECT id, id_nodo, phone_number, user_name, escalated_to_agent, last_message_at
        FROM whatsapp_conversations
-       WHERE id_nodo = ?
+       WHERE id_nodo = ? ${filtroNumero}
        ORDER BY last_message_at DESC
        LIMIT 50`,
-      [idNodo]
+      params
     );
 
     if (!convRows || convRows.length === 0) return { chats: [] };
@@ -68,11 +100,17 @@ export async function getChatsOmnicanal() {
 
     const chats = await Promise.all(convRows.map(async (conv: any) => {
       const [msgRows]: any = await pool.query(
-        `SELECT id, direction, message_type, content, status, created_at
-         FROM whatsapp_messages
-         WHERE conversation_id = ?
-         ORDER BY id ASC
-         LIMIT 200`,
+        // Los ÚLTIMOS 200 por fecha, mostrados en orden cronológico. Se ordena
+        // por created_at y no por id porque el historial de coexistencia llega
+        // después, con fechas viejas (ids altos para mensajes antiguos).
+        `SELECT * FROM (
+           SELECT id, direction, message_type, content, status, created_at
+           FROM whatsapp_messages
+           WHERE conversation_id = ?
+           ORDER BY created_at DESC, id DESC
+           LIMIT 200
+         ) ultimos
+         ORDER BY created_at ASC, id ASC`,
         [conv.id]
       );
 
@@ -102,6 +140,7 @@ export async function getChatsOmnicanal() {
         id: String(conv.id),
         name: nombreOTelefono,
         phone: conv.phone_number,
+        idNodo: conv.id_nodo,
         avatar: String(nombreOTelefono).substring(0, 2).toUpperCase(),
         channel: 'whatsapp',
         lastMessage: ultimo?.content || (ultimo ? `[Adjunto: ${ultimo.message_type}]` : ''),
@@ -163,23 +202,33 @@ export async function getLlamadasRecientes() {
 // ya corre server-side en el mismo proceso, y un self-fetch dependería de
 // NEXT_PUBLIC_APP_URL, que no está configurado en .env.local (caería a
 // localhost:3001, casi seguro incorrecto en producción).
-export async function enviarMensajeMeta(_chatId: string, phone: string, message: string) {
+// phoneNumberId: número de WhatsApp elegido por el agente en la bandeja. Si
+// no se pasa (chats de antes del selector, u otro canal), cae al primer
+// número activo del nodo como antes.
+export async function enviarMensajeMeta(_chatId: string, phone: string, message: string, phoneNumberId?: string) {
   try {
     const idNodo = await getIdNodoActivo();
     const { default: pool } = await import('@/lib/db');
 
+    const params: any[] = [idNodo];
+    let filtroNumero = '';
+    if (phoneNumberId) {
+      filtroNumero = 'AND identificador = ?';
+      params.push(phoneNumberId);
+    }
     const [cuentaRows]: any = await pool.query(
       `SELECT identificador, token FROM crm_cuentas
-       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1 LIMIT 1`,
-      [idNodo]
+       WHERE id_nodo = ? AND canal = 'whatsapp' AND activo = 1 ${filtroNumero}
+       ORDER BY id ASC LIMIT 1`,
+      params
     );
     if (!cuentaRows || cuentaRows.length === 0) {
       return { success: false, error: 'No hay número de WhatsApp configurado para este nodo.' };
     }
-    const phoneNumberId = cuentaRows[0].identificador;
+    const phoneNumberIdEnvio = cuentaRows[0].identificador;
     const token = cuentaRows[0].token;
 
-    const res = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberIdEnvio}/messages`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -195,8 +244,8 @@ export async function enviarMensajeMeta(_chatId: string, phone: string, message:
     const wabaMessageId: string | null = data.messages[0]?.id || null;
 
     const [convRows]: any = await pool.query(
-      `SELECT id FROM whatsapp_conversations WHERE id_nodo = ? AND phone_number = ? LIMIT 1`,
-      [idNodo, phone]
+      `SELECT id FROM whatsapp_conversations WHERE id_nodo = ? AND phone_number = ? AND phone_number_id = ? LIMIT 1`,
+      [idNodo, phone, phoneNumberIdEnvio]
     );
     const conversationId = convRows?.[0]?.id || null;
 

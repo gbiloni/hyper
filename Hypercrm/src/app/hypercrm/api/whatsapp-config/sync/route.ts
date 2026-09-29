@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
+import { vincularCiudades, resolverIdNodos } from '../ciudades';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    let { waba_id, access_token } = body || {};
+    let { waba_id, access_token, id_nodos } = body || {};
 
     const cookieStore = await cookies();
     const idNodoStr = cookieStore.get("hyperisp_active_node_id")?.value;
-    const idNodo = idNodoStr ? parseInt(idNodoStr, 10) : 1;
+    const nodos = resolverIdNodos(id_nodos, idNodoStr);
 
     // Modo automático: si no mandaron waba_id/access_token a mano, usamos los
     // de una cuenta que ya se conectó antes (Alta Manual o Asistente de Meta),
@@ -23,7 +25,7 @@ export async function POST(req: Request) {
            AND waba_id IS NOT NULL AND waba_id <> ''
            AND token IS NOT NULL AND token <> ''
          LIMIT 1`,
-        [idNodo]
+        [nodos[0]]
       );
       if (!existing || existing.length === 0) {
         return NextResponse.json(
@@ -40,7 +42,7 @@ export async function POST(req: Request) {
     }
 
     // Consultar los números asociados a este WABA desde Meta Graph API
-    const metaUrl = `https://graph.facebook.com/v20.0/${waba_id}/phone_numbers?access_token=${access_token}`;
+    const metaUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${waba_id}/phone_numbers?access_token=${access_token}`;
     const resMeta = await fetch(metaUrl);
     const dataMeta = await resMeta.json();
 
@@ -63,9 +65,10 @@ export async function POST(req: Request) {
       await db.query(
         `INSERT INTO crm_cuentas (id_nodo, canal, identificador, waba_id, token, activo)
          VALUES (?, 'whatsapp', ?, ?, ?, 1)
-         ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1`,
-        [idNodo, phoneNumberId, waba_id, access_token]
+         ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1, id_nodo = VALUES(id_nodo)`,
+        [Math.min(...nodos), phoneNumberId, waba_id, access_token]
       );
+      await vincularCiudades('whatsapp', phoneNumberId, nodos);
       syncedCount++;
     }
 

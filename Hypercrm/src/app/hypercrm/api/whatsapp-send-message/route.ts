@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { phone_number, message_type, content, template_id, variables, mark_escalated } = body;
+    const { phone_number, message_type, content, template_id, variables, mark_escalated, header } = body;
 
     if (!phone_number || !message_type) {
       return NextResponse.json(
@@ -79,16 +80,39 @@ export async function POST(req: Request) {
         );
       }
 
+      // El header es opcional: solo hace falta cuando la plantilla aprobada
+      // en Meta tiene un componente de header con variable (imagen o texto).
+      // Sin esto, mandar una plantilla con header de imagen fallaba porque
+      // el payload solo llevaba el componente "body".
+      const components: any[] = [];
+      if (header) {
+        if (header.type === 'image' && (header.image_id || header.image_link)) {
+          components.push({
+            type: 'header',
+            parameters: [{
+              type: 'image',
+              image: header.image_id ? { id: header.image_id } : { link: header.image_link },
+            }],
+          });
+        } else if (header.type === 'text' && header.text) {
+          components.push({ type: 'header', parameters: [{ type: 'text', text: String(header.text) }] });
+        } else {
+          return NextResponse.json(
+            { success: false, error: 'header debe ser {type:"image", image_id|image_link} o {type:"text", text}' },
+            { status: 400 }
+          );
+        }
+      }
+      components.push({
+        type: 'body',
+        parameters: (variables || []).map((v: any) => ({ type: 'text', text: String(v) }))
+      });
+
       payload.type = 'template';
       payload.template = {
         name: templates[0].name,
         language: { code: 'es' },
-        components: [
-          {
-            type: 'body',
-            parameters: (variables || []).map((v: any) => ({ type: 'text', text: String(v) }))
-          }
-        ]
+        components,
       };
     } else {
       return NextResponse.json(
@@ -99,7 +123,7 @@ export async function POST(req: Request) {
 
     // Send to Meta API
     const response = await fetch(
-      `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`,
       {
         method: 'POST',
         headers: {

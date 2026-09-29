@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server';
+import { GRAPH_VERSION } from '@/lib/metaGraph';
 import db from '@/lib/db';
 import { cookies } from 'next/headers';
+import { vincularCiudades, resolverIdNodos } from '../ciudades';
+import { pedirSyncInicial } from '@/lib/whatsappSyncInicial';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { code, waba_id, phone_number_id } = body;
+    const { code, waba_id, phone_number_id, id_nodos } = body;
 
     const cookieStore = await cookies();
     const idNodoStr = cookieStore.get("hyperisp_active_node_id")?.value;
-    const idNodo = idNodoStr ? parseInt(idNodoStr, 10) : 1;
+    const nodos = resolverIdNodos(id_nodos, idNodoStr);
 
     const appId = process.env.NEXT_PUBLIC_META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
@@ -20,7 +23,7 @@ export async function POST(req: Request) {
     }
 
     // Intercambiar code por Access Token en Meta
-    const tokenUrl = `https://graph.facebook.com/v20.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${code}`;
+    const tokenUrl = `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${code}`;
     
     const tokenRes = await fetch(tokenUrl);
     const tokenData = await tokenRes.json();
@@ -33,7 +36,7 @@ export async function POST(req: Request) {
     const accessToken = tokenData.access_token;
 
     // Obtener detalles del teléfono (display_name) desde Meta Graph
-    const phoneUrl = `https://graph.facebook.com/v20.0/${phone_number_id}?access_token=${accessToken}`;
+    const phoneUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${phone_number_id}?access_token=${accessToken}`;
     const phoneRes = await fetch(phoneUrl);
     const phoneData = await phoneRes.json();
     
@@ -45,11 +48,28 @@ export async function POST(req: Request) {
     await db.query(
       `INSERT INTO crm_cuentas (id_nodo, canal, identificador, waba_id, token, activo)
        VALUES (?, 'whatsapp', ?, ?, ?, 1)
-       ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1`,
-      [idNodo, phone_number_id, waba_id || null, accessToken]
+       ON DUPLICATE KEY UPDATE waba_id = VALUES(waba_id), token = VALUES(token), activo = 1, id_nodo = VALUES(id_nodo)`,
+      [Math.min(...nodos), phone_number_id, waba_id || null, accessToken]
     );
+    await vincularCiudades('whatsapp', phone_number_id, nodos);
 
-    return NextResponse.json({ success: true, message: 'Cuenta vinculada exitosamente' });
+    // Coexistence: si el número también vive en la app del celular, se pide a
+    // Meta (una sola vez, dentro de las 24 h del alta) la agenda de contactos
+    // y el historial de chats. Nunca rompe el alta: si falla, la cuenta queda
+    // vinculada igual.
+    const sync = await pedirSyncInicial(phone_number_id, accessToken, { db, graphVersion: GRAPH_VERSION });
+    for (const [que, r] of [['Agenda', sync.contactos], ['Historial', sync.historial]] as const) {
+      if (r.estado !== 'solicitado') {
+        console.log(`[WHATSAPP-SYNC] ${que} no pedido para ${phone_number_id}: ${r.estado === 'error' ? 'error — ' : ''}${r.motivo}`);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Cuenta vinculada exitosamente',
+      sync_contactos: sync.contactos.estado,
+      sync_historial: sync.historial.estado,
+    });
 
   } catch (error: any) {
     console.error('Error en exchange local de whatsapp:', error);

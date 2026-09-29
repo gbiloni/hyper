@@ -1,1 +1,16 @@
 .obsidian/
+
+# Proyectos locales independientes / backups masivos
+Hypermgmt/
+Hyperisp/
+
+# Logs de depuracion y volcados de error
+*.log
+
+# Asistentes de IA y configuraciones locales
+.agent/
+.claude/
+.cursor/
+.codex/
+.gemini/
+openspec/

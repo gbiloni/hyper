@@ -3,14 +3,14 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const defaultTheme = {
-  name: "Neon Nights",
+  name: "Blade Runner 2049",
   colors: {
-    primary: "#0ea5e9",
-    accent: "#f43f5e",
-    background: "#0f172a",
-    backgroundPanel: "#1e293b",
-    textMain: "#f8fafc",
-    textMuted: "#94a3b8"
+    primary: "#00E5FF", // Icy cyan (rain/neon)
+    accent: "#FF8C00", // Dusty amber (Vegas)
+    background: "#050505", // Deep charcoal/black
+    backgroundPanel: "#0F1115",
+    textMain: "#EAECEE",
+    textMuted: "#7A8490"
   }
 };
 
