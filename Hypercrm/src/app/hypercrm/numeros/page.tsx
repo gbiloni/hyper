@@ -11,11 +11,11 @@ import {
 interface Cuenta {
   id: number;
   id_nodo: number;
-  ciudades?: { id: number; nombre: string }[];
+  nodo_nombre?: string | null;
   canal: string;
   identificador: string;
   waba_id?: string | null;
-  token: string;
+  tiene_token?: number | boolean; // el token nunca viaja al navegador
   activo: number;
 }
 
@@ -33,6 +33,7 @@ declare global {
 
 const META_APP_ID = process.env.NEXT_PUBLIC_META_APP_ID;
 const META_CONFIG_ID = process.env.NEXT_PUBLIC_META_CONFIG_ID;
+const ERROR_SIN_NODO = "Elegí el nodo al que pertenece este número.";
 
 export default function NumerosPage() {
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
@@ -46,14 +47,15 @@ export default function NumerosPage() {
   // Form genérico: se usa para editar cualquier canal, y para dar de alta
   // canales que no son WhatsApp (Telegram/Messenger/Instagram no tienen
   // asistente de Meta ni auto-sync, así que van directo por acá).
-  const [idNodos, setIdNodos] = useState<number[]>([]);
+  // Cada número pertenece a UN solo nodo (un nodo puede tener varios números).
+  const [idNodo, setIdNodo] = useState<number | null>(null);
   const [canal, setCanal] = useState("whatsapp");
   const [identificador, setIdentificador] = useState("");
   const [token, setToken] = useState("");
   const [activo, setActivo] = useState(true);
 
   // Alta de WhatsApp nueva: tres métodos, igual que antes en Settings >
-  // WhatsApp, ahora con la ciudad(es) elegida(s) arriba en idNodos.
+  // WhatsApp, con el nodo elegido arriba en idNodo.
   const [whatsappTab, setWhatsappTab] = useState<"manual" | "sync" | "oauth">("manual");
   const [syncWabaId, setSyncWabaId] = useState("");
   const [syncToken, setSyncToken] = useState("");
@@ -121,14 +123,14 @@ export default function NumerosPage() {
     setFormSuccess(null);
     if (cuenta) {
       setEditingId(cuenta.id);
-      setIdNodos((cuenta.ciudades || []).map(c => c.id));
+      setIdNodo(cuenta.id_nodo);
       setCanal(cuenta.canal);
       setIdentificador(cuenta.identificador);
-      setToken(cuenta.token);
+      setToken(""); // vacío = conservar el token guardado
       setActivo(cuenta.activo === 1);
     } else {
       setEditingId(null);
-      setIdNodos([]);
+      setIdNodo(null);
       setCanal("whatsapp");
       setIdentificador("");
       setToken("");
@@ -140,15 +142,11 @@ export default function NumerosPage() {
     setModalOpen(true);
   };
 
-  const toggleNodo = (id: number) => {
-    setIdNodos(prev => prev.includes(id) ? prev.filter(n => n !== id) : [...prev, id]);
-  };
-
   // Edición (cualquier canal) y alta de canales sin flujo especial propio
   // (Telegram/Messenger/Instagram) -- WhatsApp nuevo usa los handlers de abajo.
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (idNodos.length === 0) { alert("Elegí al menos una ciudad."); return; }
+    if (!idNodo) { alert(ERROR_SIN_NODO); return; }
     setSaving(true);
     try {
       const method = editingId ? "PUT" : "POST";
@@ -156,7 +154,7 @@ export default function NumerosPage() {
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id_nodos: idNodos, canal, identificador, token, activo }),
+        body: JSON.stringify({ id_nodo: idNodo, canal, identificador, token, activo }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -175,14 +173,14 @@ export default function NumerosPage() {
 
   const handleAltaManualWhatsapp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (idNodos.length === 0) { setFormError("Elegí al menos una ciudad."); return; }
+    if (!idNodo) { setFormError(ERROR_SIN_NODO); return; }
     if (!identificador.trim()) { setFormError("Ingresá el Phone Number ID o número de teléfono."); return; }
     setFormError(null); setFormSuccess(null); setConnecting(true);
     try {
       const res = await fetch("/hypercrm/api/whatsapp-config/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number_id: identificador.trim(), token: token.trim(), id_nodos: idNodos }),
+        body: JSON.stringify({ phone_number_id: identificador.trim(), token: token.trim(), id_nodo: idNodo }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -201,14 +199,14 @@ export default function NumerosPage() {
 
   const handleSyncMeta = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (idNodos.length === 0) { setFormError("Elegí al menos una ciudad."); return; }
+    if (!idNodo) { setFormError(ERROR_SIN_NODO); return; }
     if (!syncWabaId.trim() || !syncToken.trim()) { setFormError("Ingresá el WABA ID y el Access Token de Meta."); return; }
     setFormError(null); setFormSuccess(null); setConnecting(true);
     try {
       const res = await fetch("/hypercrm/api/whatsapp-config/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ waba_id: syncWabaId.trim(), access_token: syncToken.trim(), id_nodos: idNodos }),
+        body: JSON.stringify({ waba_id: syncWabaId.trim(), access_token: syncToken.trim(), id_nodo: idNodo }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -228,13 +226,13 @@ export default function NumerosPage() {
   // Usa el WABA ID + token que ya quedaron guardados de una cuenta conectada
   // antes (Alta Manual o Asistente de Meta) -- no requiere pegar nada a mano.
   const handleSyncAuto = async () => {
-    if (idNodos.length === 0) { setFormError("Elegí al menos una ciudad."); return; }
+    if (!idNodo) { setFormError(ERROR_SIN_NODO); return; }
     setFormError(null); setFormSuccess(null); setConnecting(true);
     try {
       const res = await fetch("/hypercrm/api/whatsapp-config/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id_nodos: idNodos }),
+        body: JSON.stringify({ id_nodo: idNodo }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -253,7 +251,7 @@ export default function NumerosPage() {
 
   const handleConectarOAuth = () => {
     setFormError(null); setFormSuccess(null);
-    if (idNodos.length === 0) { setFormError("Elegí al menos una ciudad."); return; }
+    if (!idNodo) { setFormError(ERROR_SIN_NODO); return; }
     if (!META_APP_ID || !META_CONFIG_ID) {
       setFormError("Falta configurar NEXT_PUBLIC_META_APP_ID / NEXT_PUBLIC_META_CONFIG_ID en .env.");
       return;
@@ -280,7 +278,7 @@ export default function NumerosPage() {
             const res = await fetch("/hypercrm/api/whatsapp-config/exchange", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ code, waba_id, phone_number_id, id_nodos: idNodos }),
+              body: JSON.stringify({ code, waba_id, phone_number_id, id_nodo: idNodo }),
             });
             const data = await res.json();
             if (!res.ok || !data.success) {
@@ -332,24 +330,20 @@ export default function NumerosPage() {
     }
   };
 
-  const ciudadesCheckboxes = (
+  const selectorNodo = (
     <div className="space-y-1.5">
-      <label className="text-xs font-semibold text-green-300 uppercase tracking-wider">Ciudades / Nodos</label>
-      <p className="text-[11px] text-[var(--text-muted)]">Un mismo número puede vincularse a más de una ciudad.</p>
-      <div className="max-h-32 overflow-y-auto space-y-1 bg-black/50 border border-white/10 rounded-lg p-2">
-        {nodos.length === 0 && <p className="text-xs text-[var(--text-muted)] px-1 py-1">No hay ciudades cargadas.</p>}
+      <label className="text-xs font-semibold text-green-300 uppercase tracking-wider">Nodo (ciudad)</label>
+      <p className="text-[11px] text-[var(--text-muted)]">Cada número pertenece a un solo nodo. Un nodo puede tener varios números.</p>
+      <select
+        value={idNodo ?? ""}
+        onChange={(e) => setIdNodo(e.target.value ? Number(e.target.value) : null)}
+        className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-green-500 transition-colors"
+      >
+        <option value="">{nodos.length === 0 ? "No hay nodos cargados" : "Elegí un nodo..."}</option>
         {nodos.map(n => (
-          <label key={n.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer text-sm text-white">
-            <input
-              type="checkbox"
-              checked={idNodos.includes(n.id)}
-              onChange={() => toggleNodo(n.id)}
-              className="w-4 h-4 rounded bg-black/50 border-white/10 text-green-500 focus:ring-green-500/50"
-            />
-            {n.nombre}
-          </label>
+          <option key={n.id} value={n.id}>{n.nombre}</option>
         ))}
-      </div>
+      </select>
     </div>
   );
 
@@ -373,7 +367,7 @@ export default function NumerosPage() {
             Números / Canales
           </h1>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            Asigná líneas de WhatsApp, Telegram, Messenger o Instagram a una o más ciudades.
+            Asigná líneas de WhatsApp, Telegram, Messenger o Instagram a un nodo (ciudad).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -429,17 +423,7 @@ export default function NumerosPage() {
                   <Fragment key={cta.id}>
                   <tr className="hover:bg-white/[0.02] transition-colors group">
                     <td className="px-6 py-4 font-bold text-white">
-                      {cta.ciudades && cta.ciudades.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {cta.ciudades.map(c => (
-                            <span key={c.id} className="inline-flex items-center rounded-md bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-300 border border-green-500/20">
-                              {c.nombre}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        `Nodo ID: ${cta.id_nodo}`
-                      )}
+                      {cta.nodo_nombre || `Nodo ID: ${cta.id_nodo}`}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -516,7 +500,7 @@ export default function NumerosPage() {
             {/* Edición (cualquier canal) o alta de canal que no es WhatsApp: form genérico */}
             {(editingId || canal !== "whatsapp") && (
               <form onSubmit={handleSave} className="p-6 space-y-4">
-                {ciudadesCheckboxes}
+                {selectorNodo}
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-green-300 uppercase tracking-wider">Tipo de Canal</label>
@@ -545,8 +529,8 @@ export default function NumerosPage() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-green-300 uppercase tracking-wider">Token de Integración (API Secret)</label>
                   <input
-                    type="text" required value={token} onChange={(e) => setToken(e.target.value)}
-                    placeholder="Pegue aquí el token o secret..."
+                    type="text" required={!editingId} value={token} onChange={(e) => setToken(e.target.value)}
+                    placeholder={editingId ? "Dejar vacío para conservar el token actual" : "Pegue aquí el token o secret..."}
                     className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-green-500 transition-colors font-mono"
                   />
                 </div>
@@ -565,10 +549,10 @@ export default function NumerosPage() {
               </form>
             )}
 
-            {/* Alta de WhatsApp nueva: mismos 3 métodos de antes, con ciudades */}
+            {/* Alta de WhatsApp nueva: mismos 3 métodos de antes, con el nodo elegido */}
             {!editingId && canal === "whatsapp" && (
               <div className="p-6 space-y-4">
-                {ciudadesCheckboxes}
+                {selectorNodo}
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-green-300 uppercase tracking-wider">Tipo de Canal</label>
